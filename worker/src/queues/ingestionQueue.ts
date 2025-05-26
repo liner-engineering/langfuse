@@ -22,6 +22,15 @@ import { ClickhouseWriter, TableName } from "../services/ClickhouseWriter";
 import { chunk } from "lodash";
 import { randomUUID } from "crypto";
 
+import { Buffer } from 'buffer';
+import { PubSubPublisher } from "../services/PubSubPublisher";
+
+const topicName = env.GCP_PUBSUB_TOPIC_NAME;
+const projectId = env.GCP_PROJECT_ID;
+
+// Initialize PubSub publisher
+const pubSubPublisher = new PubSubPublisher(topicName, projectId);
+
 export const ingestionQueueProcessorBuilder = (
   enableRedirectToSecondaryQueue: boolean,
 ): Processor => {
@@ -197,6 +206,24 @@ export const ingestionQueueProcessorBuilder = (
       // Perform merge of those events
       if (!redis) throw new Error("Redis not available");
       if (!prisma) throw new Error("Prisma not available");
+
+      // Publish events to GCP PubSub
+      try {
+        const publishPromises = events.map(async (event) => {
+          const data = Buffer.from(JSON.stringify(event));
+          try {
+            const messageId = await pubSubPublisher.publish(data);
+            logger.debug(`Message ${messageId} published to topic ${topicName}`);
+          } catch (error) {
+            logger.error(`Failed to publish message to ${topicName}:`, error);
+          }
+        });
+
+        await Promise.all(publishPromises);
+      } catch (error) {
+        logger.error('Error publishing to PubSub:', error);
+        // Don't throw error to allow rest of processing to continue
+      }
 
       await new IngestionService(
         redis,
