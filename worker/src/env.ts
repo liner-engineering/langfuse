@@ -241,6 +241,9 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(120_000), // 2 minutes
+
+  GCP_PUBSUB_TOPIC_NAME: z.string().default("langfuse-events"),
+  GCP_PROJECT_ID: z.string().default("liner-219011"),
 });
 
 export const env: z.infer<typeof EnvSchema> =
