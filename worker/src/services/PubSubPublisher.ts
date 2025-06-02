@@ -9,14 +9,17 @@ export class PubSubPublisher {
   private readonly topicName: string;
   private readonly projectId: string;
   private readonly auth: GoogleAuth;
+  private readonly key: any;
   private cachedToken: { token: string; expiry: number } | null = null;
 
   constructor(topicName: string, projectId: string) {
     this.topicName = topicName;
     this.projectId = projectId;
+    this.key = JSON.parse(process.env.GOOGLE_APPLICATION_CREDENTIALS || '{}');
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/pubsub'],
       projectId: projectId,
+      credentials: this.key,
     });
   }
 
