@@ -25,11 +25,16 @@ import { randomUUID } from "crypto";
 import { Buffer } from 'buffer';
 import { PubSubPublisher } from "../services/PubSubPublisher";
 
-const topicName = env.GCP_PUBSUB_TOPIC_NAME;
+const prodPubSubTopicName = "langfuse-events";
+const devPubSubTopicName = "langfuse-events-dev";
+const prodLangfuseProjectId = "cm0ksv9qk000e14abow8adc4y";
+const devLangfuseProjectId = "cm0kste92000814abo4uqx3rc";
+
 const projectId = env.GCP_PROJECT_ID;
 
 // Initialize PubSub publisher
-const pubSubPublisher = new PubSubPublisher(topicName, projectId);
+const pubSubPublisherProd = new PubSubPublisher(prodPubSubTopicName, projectId);
+const pubSubPublisherDev = new PubSubPublisher(devPubSubTopicName, projectId);
 
 export const ingestionQueueProcessorBuilder = (
   enableRedirectToSecondaryQueue: boolean,
@@ -231,10 +236,21 @@ export const ingestionQueueProcessorBuilder = (
         const publishPromises = events.map(async (event) => {
           const data = Buffer.from(JSON.stringify(event));
           try {
-            const messageId = await pubSubPublisher.publish(data);
-            logger.debug(`Message ${messageId} published to topic ${topicName}`);
+            if (job.data.payload.authCheck.scope.projectId == prodLangfuseProjectId) {
+              const messageId = await pubSubPublisherProd.publish(data);
+              logger.debug(`Message ${messageId} published to topic ${prodPubSubTopicName}`);
+            } else if (job.data.payload.authCheck.scope.projectId == devLangfuseProjectId) {
+              const messageId = await pubSubPublisherDev.publish(data);
+              logger.debug(`Message ${messageId} published to topic ${devPubSubTopicName}`);
+            } else {  
+              logger.warn(`Project ${job.data.payload.authCheck.scope.projectId} not in target list, skipping publish`);
+            }
           } catch (error) {
-            logger.error(`Failed to publish message to ${topicName}:`, error);
+            logger.error('Error publishing individual message to PubSub:', {
+              error: error instanceof Error ? error.message : String(error),
+              projectId: job.data.payload.authCheck.scope.projectId
+            });
+            // Don't throw to allow other messages to be processed
           }
         });
 
