@@ -233,30 +233,22 @@ export const ingestionQueueProcessorBuilder = (
 
       // Publish events to GCP PubSub
       try {
-        const publishPromises = events.map(async (event) => {
-          const data = Buffer.from(JSON.stringify(event));
-          try {
-            if (job.data.payload.authCheck.scope.projectId == prodLangfuseProjectId) {
-              const messageId = await pubSubPublisherProd.publish(data);
-              logger.debug(`Message ${messageId} published to topic ${prodPubSubTopicName}`);
-            } else if (job.data.payload.authCheck.scope.projectId == devLangfuseProjectId) {
-              const messageId = await pubSubPublisherDev.publish(data);
-              logger.debug(`Message ${messageId} published to topic ${devPubSubTopicName}`);
-            } else {  
-              logger.warn(`Project ${job.data.payload.authCheck.scope.projectId} not in target list, skipping publish`);
-            }
-          } catch (error) {
-            logger.error('Error publishing individual message to PubSub:', {
-              error: error instanceof Error ? error.message : String(error),
-              projectId: job.data.payload.authCheck.scope.projectId
-            });
-            // Don't throw to allow other messages to be processed
-          }
-        });
-
-        await Promise.all(publishPromises);
+        const data = Buffer.from(JSON.stringify(events));
+        if (job.data.payload.authCheck.scope.projectId === prodLangfuseProjectId) {
+          const messageId = await pubSubPublisherProd.publish(data);
+          logger.debug(`Batch of ${events.length} messages published to topic ${prodPubSubTopicName} with ID ${messageId}`);
+        } else if (job.data.payload.authCheck.scope.projectId === devLangfuseProjectId) {
+          const messageId = await pubSubPublisherDev.publish(data);
+          logger.debug(`Batch of ${events.length} messages published to topic ${devPubSubTopicName} with ID ${messageId}`);
+        } else {
+          logger.warn(`Project ${job.data.payload.authCheck.scope.projectId} not in target list, skipping publish`);
+        }
       } catch (error) {
-        logger.error('Error publishing to PubSub:', error);
+        logger.error('Error publishing batch to PubSub:', {
+          error: error instanceof Error ? error.message : String(error),
+          projectId: job.data.payload.authCheck.scope.projectId,
+          eventCount: events.length
+        });
         // Don't throw error to allow rest of processing to continue
       }
 
