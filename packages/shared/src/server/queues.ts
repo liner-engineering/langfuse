@@ -1,15 +1,17 @@
 /* eslint-disable no-unused-vars */
-import { z } from "zod";
-import { eventTypes } from ".";
+import { z } from "zod/v4";
+import { eventTypes } from "./ingestion/types";
 import {
   BatchActionQuerySchema,
   BatchActionType,
 } from "../features/batchAction/types";
-import { BatchExportTableName } from "../features/batchExport/types";
+import { BatchTableNames } from "../interfaces/tableNames";
+import { EventActionSchema } from "../domain";
+import { PromptDomainSchema } from "../domain/prompts";
 
 export const IngestionEvent = z.object({
   data: z.object({
-    type: z.nativeEnum(eventTypes),
+    type: z.enum(Object.values(eventTypes)),
     eventBodyId: z.string(),
     fileKey: z.string().optional(),
     skipS3List: z.boolean().optional(),
@@ -76,28 +78,28 @@ export const BatchActionProcessingEventSchema = z.discriminatedUnion(
       actionId: z.literal("score-delete"),
       projectId: z.string(),
       query: BatchActionQuerySchema,
-      tableName: z.nativeEnum(BatchExportTableName),
+      tableName: z.enum(BatchTableNames),
       cutoffCreatedAt: z.date(),
       targetId: z.string().optional(),
-      type: z.nativeEnum(BatchActionType),
+      type: z.enum(BatchActionType),
     }),
     z.object({
       actionId: z.literal("trace-delete"),
       projectId: z.string(),
       query: BatchActionQuerySchema,
-      tableName: z.nativeEnum(BatchExportTableName),
+      tableName: z.enum(BatchTableNames),
       cutoffCreatedAt: z.date(),
       targetId: z.string().optional(),
-      type: z.nativeEnum(BatchActionType),
+      type: z.enum(BatchActionType),
     }),
     z.object({
       actionId: z.literal("trace-add-to-annotation-queue"),
       projectId: z.string(),
       query: BatchActionQuerySchema,
-      tableName: z.nativeEnum(BatchExportTableName),
+      tableName: z.enum(BatchTableNames),
       cutoffCreatedAt: z.date(),
       targetId: z.string().optional(),
-      type: z.nativeEnum(BatchActionType),
+      type: z.enum(BatchActionType),
     }),
     z.object({
       actionId: z.literal("eval-create"),
@@ -120,6 +122,7 @@ export const CreateEvalQueueEventSchema = DatasetRunItemUpsertEventSchema.and(
     z.object({
       timestamp: z.date(),
       configId: z.string(),
+      exactTimestamp: z.date().optional(),
     }),
   ),
 );
@@ -127,6 +130,33 @@ export const CreateEvalQueueEventSchema = DatasetRunItemUpsertEventSchema.and(
 export const DeadLetterRetryQueueEventSchema = z.object({
   timestamp: z.date(),
 });
+
+export const WebhookOutboundEnvelopeSchema = z.object({
+  prompt: PromptDomainSchema,
+  action: EventActionSchema,
+  type: z.literal("prompt-version"),
+});
+
+export const WebhookInputSchema = z.object({
+  projectId: z.string(),
+  automationId: z.string(),
+  executionId: z.string(),
+  payload: WebhookOutboundEnvelopeSchema,
+});
+
+export const EntityChangeEventSchema = z.discriminatedUnion("entityType", [
+  z.object({
+    entityType: z.literal("prompt-version"),
+    projectId: z.string(),
+    promptId: z.string(),
+    action: EventActionSchema,
+    prompt: PromptDomainSchema,
+  }),
+  // Add other entity types here in the future
+]);
+
+export type WebhookInput = z.infer<typeof WebhookInputSchema>;
+export type EntityChangeEventType = z.infer<typeof EntityChangeEventSchema>;
 
 export type CreateEvalQueueEventType = z.infer<
   typeof CreateEvalQueueEventSchema
@@ -160,6 +190,8 @@ export type DeadLetterRetryQueueEventType = z.infer<
   typeof DeadLetterRetryQueueEventSchema
 >;
 
+export type WebhookQueueEventType = z.infer<typeof WebhookInputSchema>;
+
 export enum QueueName {
   TraceUpsert = "trace-upsert", // Ingestion pipeline adds events on each Trace upsert
   TraceDelete = "trace-delete",
@@ -183,6 +215,8 @@ export enum QueueName {
   CreateEvalQueue = "create-eval-queue",
   ScoreDelete = "score-delete",
   DeadLetterRetryQueue = "dead-letter-retry-queue",
+  WebhookQueue = "webhook-queue",
+  EntityChangeQueue = "entity-change-queue",
 }
 
 export enum QueueJobs {
@@ -208,6 +242,8 @@ export enum QueueJobs {
   CreateEvalJob = "create-eval-job",
   ScoreDelete = "score-delete",
   DeadLetterRetryJob = "dead-letter-retry-job",
+  WebhookJob = "webhook-job",
+  EntityChangeJob = "entity-change-job",
 }
 
 export type TQueueJobTypes = {
@@ -306,5 +342,17 @@ export type TQueueJobTypes = {
     id: string;
     payload: DeadLetterRetryQueueEventType;
     name: QueueJobs.DeadLetterRetryJob;
+  };
+  [QueueName.WebhookQueue]: {
+    timestamp: Date;
+    id: string;
+    payload: WebhookInput;
+    name: QueueJobs.WebhookJob;
+  };
+  [QueueName.EntityChangeQueue]: {
+    timestamp: Date;
+    id: string;
+    payload: EntityChangeEventType;
+    name: QueueJobs.EntityChangeJob;
   };
 };

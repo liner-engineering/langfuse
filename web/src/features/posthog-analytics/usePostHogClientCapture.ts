@@ -27,6 +27,7 @@ const events = {
     "io_pretty_format_toggle_group",
     "test_in_playground_button_click",
     "display_mode_switch",
+    "download_button_click",
   ],
   generations: ["export"],
   saved_views: [
@@ -166,6 +167,7 @@ const events = {
     "api_key_create",
     "llm_api_key_delete",
     "llm_api_key_create",
+    "llm_api_key_update",
     "send_membership_invitation",
     "delete_membership_invitation",
     "delete_membership",

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { memo, useMemo, useState } from "react";
 import { Button } from "@/src/components/ui/button";
 import { Check, ChevronsDownUp, ChevronsUpDown, Copy } from "lucide-react";
 import { cn } from "@/src/utils/tailwind";
@@ -13,6 +13,7 @@ import { type MediaReturnType } from "@/src/features/media/validation";
 import { LangfuseMediaView } from "@/src/components/ui/LangfuseMediaView";
 import { MarkdownJsonViewHeader } from "@/src/components/ui/MarkdownJsonView";
 import { renderContentWithPromptButtons } from "@/src/features/prompts/components/renderContentWithPromptButtons";
+import { copyTextToClipboard } from "@/src/utils/clipboard";
 
 const IO_TABLE_CHAR_LIMIT = 10000;
 
@@ -40,8 +41,17 @@ export function JSONView(props: {
       ? 100_000_000 // if null, show all (100M chars)
       : (props.collapseStringsAfterLength ?? 500);
 
-  const handleOnCopy = () => {
-    void navigator.clipboard.writeText(stringifyJsonNode(parsedJson));
+  const handleOnCopy = (event?: React.MouseEvent<HTMLButtonElement>) => {
+    if (event) {
+      event.preventDefault();
+    }
+    const textToCopy = stringifyJsonNode(parsedJson);
+    void copyTextToClipboard(textToCopy);
+
+    // Keep focus on the copy button to prevent focus shifting
+    if (event) {
+      event.currentTarget.focus();
+    }
   };
 
   const handleOnValueChange = () => {
@@ -156,14 +166,18 @@ export function CodeView(props: {
   const [isCopied, setIsCopied] = useState(false);
   const [isCollapsed, setCollapsed] = useState(props.defaultCollapsed);
 
-  const handleCopy = () => {
+  const handleCopy = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
     setIsCopied(true);
-    void navigator.clipboard.writeText(
+    const content =
       typeof props.content === "string"
         ? props.content
-        : (props.content?.join("\n") ?? ""),
-    );
+        : (props.content?.join("\n") ?? "");
+    void copyTextToClipboard(content);
     setTimeout(() => setIsCopied(false), 1000);
+
+    // Keep focus on the copy button to prevent focus shifting
+    event.currentTarget.focus();
   };
 
   const handleShowAll = () => setCollapsed(!isCollapsed);
@@ -176,9 +190,9 @@ export function CodeView(props: {
         props.scrollable && "max-h-full min-h-0",
       )}
     >
-      <div className="my-1 flex flex-shrink-0 items-center justify-between pl-1">
+      <>
         {props.title ? (
-          <>
+          <div className="my-1 flex flex-shrink-0 items-center justify-between pl-1">
             <div className="text-sm font-medium">{props.title}</div>
             <Button
               variant="ghost"
@@ -192,9 +206,9 @@ export function CodeView(props: {
                 <Copy className="h-3 w-3" />
               )}
             </Button>
-          </>
+          </div>
         ) : undefined}
-      </div>
+      </>
       <div
         className={cn(
           "relative flex flex-col gap-2 rounded-md border",
@@ -255,7 +269,8 @@ export const IOTableCell = ({
     return <JsonSkeleton className="h-full w-full overflow-hidden px-2 py-1" />;
   }
 
-  const stringifiedJson = data ? stringifyJsonNode(data) : undefined;
+  const stringifiedJson =
+    data !== null && data !== undefined ? stringifyJsonNode(data) : undefined;
 
   // perf: truncate to IO_TABLE_CHAR_LIMIT characters as table becomes unresponsive attempting to render large JSONs with high levels of nesting
   const shouldTruncate =
@@ -301,6 +316,8 @@ export const IOTableCell = ({
     </>
   );
 };
+
+export const MemoizedIOTableCell = memo(IOTableCell);
 
 export const JsonSkeleton = ({
   className,

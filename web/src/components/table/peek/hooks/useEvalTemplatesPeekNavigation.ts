@@ -1,16 +1,18 @@
-import { type EvalsTemplateRow } from "@/src/ee/features/evals/components/eval-templates-table";
+import { type EvalsTemplateRow } from "@/src/features/evals/components/eval-templates-table";
 import { type ListEntry } from "@/src/features/navigate-detail-pages/context";
 import { useRouter } from "next/router";
+import { getPathnameWithoutBasePath } from "@/src/utils/api";
 
-export const useEvalTemplatesPeekNavigation = (urlPathname: string) => {
+export const useEvalTemplatesPeekNavigation = () => {
   const router = useRouter();
   const { projectId, peek } = router.query;
 
   const getNavigationPath = (entry: ListEntry) => {
     const url = new URL(window.location.href);
+    const pathname = getPathnameWithoutBasePath();
 
     // Update the path part
-    url.pathname = urlPathname;
+    url.pathname = pathname;
 
     // Keep all existing query params
     const params = new URLSearchParams(url.search);
@@ -27,7 +29,8 @@ export const useEvalTemplatesPeekNavigation = (urlPathname: string) => {
     const pathname = `/project/${projectId}/evals/templates/${encodeURIComponent(peek as string)}`;
 
     if (openInNewTab) {
-      window.open(pathname, "_blank");
+      const pathnameWithBasePath = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}${pathname}`;
+      window.open(pathnameWithBasePath, "_blank");
     } else {
       router.push(pathname);
     }

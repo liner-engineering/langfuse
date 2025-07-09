@@ -7,9 +7,15 @@ import {
   type DateTimeFilter,
   convertClickhouseToDomain,
   type TraceRecordReadType,
+  getTimeframesTracesAMT,
+  measureAndReturn,
 } from "@langfuse/shared/src/server";
 import { type OrderByState } from "@langfuse/shared";
 import { snakeCase } from "lodash";
+import {
+  TRACE_FIELD_GROUPS,
+  type TraceFieldGroup,
+} from "@/src/features/public-api/types/traces";
 
 export type TraceQueryType = {
   page: number;
@@ -26,6 +32,7 @@ export type TraceQueryType = {
   environment?: string | string[];
   fromTimestamp?: string;
   toTimestamp?: string;
+  fields?: TraceFieldGroup[];
 };
 
 export const generateTracesForPublicApi = async ({
@@ -35,6 +42,12 @@ export const generateTracesForPublicApi = async ({
   props: TraceQueryType;
   orderBy: OrderByState;
 }) => {
+  const requestedFields = props.fields ?? TRACE_FIELD_GROUPS;
+  const includeIO = requestedFields.includes("io");
+  const includeScores = requestedFields.includes("scores");
+  const includeObservations = requestedFields.includes("observations");
+  const includeMetrics = requestedFields.includes("metrics");
+
   const filter = convertApiProvidedFilterToClickhouseFilter(
     props,
     filterParams,
@@ -61,18 +74,12 @@ export const generateTracesForPublicApi = async ({
       ),
   );
 
-  // If user provides an order we prefer it or fallback to timestamp as the default.
-  // In both cases we append a t.event_ts desc order to pick the latest event in case of duplicates
-  // if we want to use a skip index.
-  // This may still return stale information if the orderBy key was updated between traces or if a filter
-  // applies only to a stale value.
-  const chOrderBy =
-    (orderByToClickhouseSql(orderBy || [], orderByColumns) ||
-      "ORDER BY t.timestamp desc") +
-    (shouldUseSkipIndexes ? ", t.event_ts desc" : "");
+  // Build CTEs conditionally based on requested fields
+  const ctes = [];
 
-  const query = `
-    WITH observation_stats AS (
+  if (includeObservations || includeMetrics) {
+    ctes.push(`
+    observation_stats AS (
       SELECT
         trace_id,
         project_id,
@@ -84,7 +91,12 @@ export const generateTracesForPublicApi = async ({
       ${timeFilter ? `AND start_time >= {cteTimeFilter: DateTime64(3)} - ${TRACE_TO_OBSERVATIONS_INTERVAL}` : ""}
       ${environmentFilter.length() > 0 ? `AND ${appliedEnvironmentFilter.query}` : ""}
       GROUP BY project_id, trace_id
-    ), score_stats AS (
+    )`);
+  }
+
+  if (includeScores) {
+    ctes.push(`
+    score_stats AS (
       SELECT
         trace_id,
         project_id,
@@ -96,75 +108,174 @@ export const generateTracesForPublicApi = async ({
       ${timeFilter ? `AND timestamp >= {cteTimeFilter: DateTime64(3)}` : ""}
       ${environmentFilter.length() > 0 ? `AND ${appliedEnvironmentFilter.query}` : ""}
       GROUP BY project_id, trace_id
-    )
+    )`);
+  }
 
-    SELECT
-      t.id as id,
-      CONCAT('/project/', t.project_id, '/traces/', t.id) as "htmlPath",
-      t.project_id as project_id,
-      t.timestamp as timestamp,
-      t.name as name,
-      t.environment as environment,
-      t.input as input,
-      t.output as output,
-      t.session_id as session_id,
-      t.metadata as metadata,
-      t.user_id as user_id,
-      t.release as release,
-      t.version as version,
-      t.bookmarked as bookmarked,
-      t.public as public,
-      t.tags as tags,
-      t.created_at as created_at,
-      t.updated_at as updated_at,
-      s.score_ids as scores,
-      o.observation_ids as observations,
-      COALESCE(o.latency_milliseconds / 1000, 0) as latency,
-      COALESCE(o.total_cost, 0) as totalCost
-    FROM traces t ${shouldUseSkipIndexes ? "" : "FINAL"}
-    LEFT JOIN observation_stats o ON t.id = o.trace_id AND t.project_id = o.project_id
-    LEFT JOIN score_stats s ON t.id = s.trace_id AND t.project_id = s.project_id
-    WHERE t.project_id = {projectId: String}
-    ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
-    ${chOrderBy}
-    ${shouldUseSkipIndexes ? "LIMIT 1 by t.id, t.project_id" : ""}
-    ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
-  `;
+  const withClause = ctes.length > 0 ? `WITH ${ctes.join(", ")}` : "";
 
-  const result = await queryClickhouse<
-    TraceRecordReadType & {
-      observations: string[];
-      scores: string[];
-      totalCost: number;
-      latency: number;
-      htmlPath: string;
-    }
-  >({
-    query,
-    params: {
-      ...appliedEnvironmentFilter.params,
-      ...appliedFilter.params,
-      projectId: props.projectId,
-      ...(props.limit !== undefined ? { limit: props.limit } : {}),
-      ...(props.page !== undefined
-        ? { offset: (props.page - 1) * props.limit }
-        : {}),
-      ...(timeFilter
-        ? {
-            cteTimeFilter: convertDateToClickhouseDateTime(timeFilter.value),
-          }
-        : {}),
+  const result = await measureAndReturn({
+    operationName: "getTracesForPublicApi",
+    projectId: props.projectId,
+    input: {
+      params: {
+        ...appliedEnvironmentFilter.params,
+        ...appliedFilter.params,
+        projectId: props.projectId,
+        ...(props.limit !== undefined ? { limit: props.limit } : {}),
+        ...(props.page !== undefined
+          ? { offset: (props.page - 1) * props.limit }
+          : {}),
+        ...(timeFilter
+          ? {
+              cteTimeFilter: convertDateToClickhouseDateTime(timeFilter.value),
+            }
+          : {}),
+      },
+      tags: {
+        feature: "tracing",
+        type: "trace",
+        kind: "public-api",
+        projectId: props.projectId,
+      },
+      fromTimestamp: timeFilter?.value ?? undefined,
+    },
+    existingExecution: (input) => {
+      // If user provides an order we prefer it or fallback to timestamp as the default.
+      // In both cases we append a t.event_ts desc order to pick the latest event in case of duplicates
+      // if we want to use a skip index.
+      // This may still return stale information if the orderBy key was updated between traces or if a filter
+      // applies only to a stale value.
+      const chOrderBy =
+        (orderByToClickhouseSql(orderBy || [], orderByColumns) ||
+          "ORDER BY t.timestamp desc") +
+        (shouldUseSkipIndexes ? ", t.event_ts desc" : "");
+
+      const query = `
+        ${withClause}
+    
+        SELECT
+          -- Core fields (always included)
+          t.id as id,
+          CONCAT('/project/', t.project_id, '/traces/', t.id) as "htmlPath",
+          t.project_id as project_id,
+          t.timestamp as timestamp,
+          t.name as name,
+          t.environment as environment,
+          t.session_id as session_id,
+          t.user_id as user_id,
+          t.release as release,
+          t.version as version,
+          t.bookmarked as bookmarked,
+          t.public as public,
+          t.tags as tags,
+          t.created_at as created_at,
+          t.updated_at as updated_at
+          -- IO fields (conditional)
+          ${includeIO ? ", t.input as input, t.output as output, t.metadata as metadata" : ""}
+          -- Scores (conditional)
+          ${includeScores ? ", s.score_ids as scores" : ""}
+          -- Observations (conditional)
+          ${includeObservations ? ", o.observation_ids as observations" : ""}
+          -- Metrics (conditional)
+          ${includeMetrics ? ", COALESCE(o.latency_milliseconds / 1000, 0) as latency, COALESCE(o.total_cost, 0) as totalCost" : ""}
+        FROM traces t ${shouldUseSkipIndexes ? "" : "FINAL"}
+        ${includeObservations || includeMetrics ? "LEFT JOIN observation_stats o ON t.id = o.trace_id AND t.project_id = o.project_id" : ""}
+        ${includeScores ? "LEFT JOIN score_stats s ON t.id = s.trace_id AND t.project_id = s.project_id" : ""}
+        WHERE t.project_id = {projectId: String}
+        ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
+        ${chOrderBy}
+        ${shouldUseSkipIndexes ? "LIMIT 1 by t.id, t.project_id" : ""}
+        ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+      `;
+
+      return queryClickhouse<
+        TraceRecordReadType & {
+          observations?: string[];
+          scores?: string[];
+          totalCost?: number;
+          latency?: number;
+          htmlPath: string;
+        }
+      >({
+        query,
+        params: input.params,
+        tags: input.tags,
+      });
+    },
+    newExecution: (input) => {
+      const tracesAmt = getTimeframesTracesAMT(input.fromTimestamp);
+
+      // If user provides an order we prefer it or fallback to timestamp as the default.
+      const chOrderBy =
+        orderByToClickhouseSql(orderBy || [], orderByColumns) ||
+        "ORDER BY t.start_time desc";
+
+      const query = `
+        ${withClause}
+        
+        SELECT
+          -- Core fields (always included)
+          t.id as id,
+          CONCAT('/project/', t.project_id, '/traces/', t.id) as "htmlPath",
+          t.project_id as project_id,
+          t.start_time as timestamp,
+          t.name as name,
+          t.environment as environment,
+          t.session_id as session_id,
+          t.user_id as user_id,
+          t.release as release,
+          t.version as version,
+          finalizeAggregation(t.bookmarked) as bookmarked,
+          finalizeAggregation(t.public) as public,
+          t.tags as tags,
+          t.created_at as created_at,
+          t.updated_at as updated_at
+          -- IO fields (conditional)
+          ${includeIO ? ", finalizeAggregation(t.input) as input, finalizeAggregation(t.output) as output, t.metadata as metadata" : ""}
+          -- Scores (conditional)
+          ${includeScores ? ", s.score_ids as scores" : ""}
+          -- Observations (conditional)
+          ${includeObservations ? ", o.observation_ids as observations" : ""}
+          -- Metrics (conditional)
+          ${includeMetrics ? ", COALESCE(o.latency_milliseconds / 1000, 0) as latency, COALESCE(o.total_cost, 0) as totalCost" : ""}
+        FROM ${tracesAmt} t
+        ${includeObservations || includeMetrics ? "LEFT JOIN observation_stats o ON t.id = o.trace_id AND t.project_id = o.project_id" : ""}
+        ${includeScores ? "LEFT JOIN score_stats s ON t.id = s.trace_id AND t.project_id = s.project_id" : ""}
+        WHERE t.project_id = {projectId: String}
+        ${filter.length() > 0 ? `AND ${appliedFilter.query}` : ""}
+        ${chOrderBy}
+        ${props.limit !== undefined && props.page !== undefined ? `LIMIT {limit: Int32} OFFSET {offset: Int32}` : ""}
+      `;
+
+      return queryClickhouse<
+        TraceRecordReadType & {
+          observations?: string[];
+          scores?: string[];
+          totalCost?: number;
+          latency?: number;
+          htmlPath: string;
+        }
+      >({
+        query,
+        params: input.params,
+        tags: input.tags,
+      });
     },
   });
 
-  return result.map((trace) => ({
-    ...convertClickhouseToDomain(trace),
-    observations: trace.observations,
-    scores: trace.scores,
-    totalCost: trace.totalCost,
-    latency: trace.latency,
-    htmlPath: trace.htmlPath,
-  }));
+  return result.map((trace) => {
+    return {
+      ...convertClickhouseToDomain(trace),
+      // Conditionally include additional fields based on request
+      ...(includeObservations && { observations: trace.observations ?? null }),
+      ...(includeScores && { scores: trace.scores ?? null }),
+      ...(includeMetrics && {
+        totalCost: trace.totalCost ?? null,
+        latency: trace.latency ?? null,
+      }),
+      htmlPath: trace.htmlPath,
+    };
+  });
 };
 
 export const getTracesCountForPublicApi = async ({

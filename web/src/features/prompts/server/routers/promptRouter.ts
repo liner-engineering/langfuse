@@ -1,11 +1,6 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 
 import { auditLog } from "@/src/features/audit-logs/auditLog";
-import {
-  CreatePromptTRPCSchema,
-  PromptLabelSchema,
-  PromptType,
-} from "@/src/features/prompts/server/utils/validation";
 import { throwIfNoProjectAccess } from "@/src/features/rbac/utils/checkProjectAccess";
 import { throwIfNoEntitlement } from "@/src/features/entitlements/server/hasEntitlement";
 import {
@@ -15,14 +10,17 @@ import {
 import { type Prompt, Prisma } from "@langfuse/shared/src/db";
 import { createPrompt, duplicatePrompt } from "../actions/createPrompt";
 import { checkHasProtectedLabels } from "../utils/checkHasProtectedLabels";
-import { promptsTableCols } from "@/src/server/api/definitions/promptsTable";
 import {
+  CreatePromptTRPCSchema,
   InvalidRequestError,
+  LATEST_PROMPT_LABEL,
   optionalPaginationZod,
   paginationZod,
+  PromptLabelSchema,
+  promptsTableCols,
+  PromptType,
 } from "@langfuse/shared";
 import { orderBy, singleFilter } from "@langfuse/shared";
-import { LATEST_PROMPT_LABEL } from "@/src/features/prompts/constants";
 import {
   orderByToPrismaSql,
   PromptService,
@@ -35,12 +33,15 @@ import {
 } from "@langfuse/shared/src/server";
 import { aggregateScores } from "@/src/features/scores/lib/aggregateScores";
 import { TRPCError } from "@trpc/server";
+import { promptChangeEventSourcing } from "@/src/features/prompts/server/promptChangeEventSourcing";
 
 const PromptFilterOptions = z.object({
   projectId: z.string(), // Required for protectedProjectProcedure
   filter: z.array(singleFilter),
   orderBy: orderBy,
   ...paginationZod,
+  pathPrefix: z.string().optional(),
+  searchQuery: z.string().optional(),
 });
 
 export const promptRouter = createTRPCRouter({
@@ -87,11 +88,19 @@ export const promptRouter = createTRPCRouter({
         "prompts",
       );
 
+      const pathFilter = input.pathPrefix
+        ? Prisma.sql` AND (p.name LIKE ${input.pathPrefix + "/%"} OR p.name = ${input.pathPrefix})`
+        : Prisma.empty;
+
+      const searchFilter = input.searchQuery
+        ? Prisma.sql` AND (p.name ILIKE ${`%${input.searchQuery}%`} OR EXISTS (SELECT 1 FROM UNNEST(p.tags) AS tag WHERE tag ILIKE ${`%${input.searchQuery}%`}))`
+        : Prisma.empty;
+
       const [prompts, promptCount] = await Promise.all([
         // prompts
         ctx.prisma.$queryRaw<Array<Prompt>>(
           generatePromptQuery(
-            Prisma.sql` 
+            Prisma.sql`
           p.id,
           p.name,
           p.version,
@@ -107,6 +116,8 @@ export const promptRouter = createTRPCRouter({
             orderByCondition,
             input.limit,
             input.page,
+            pathFilter,
+            searchFilter,
           ),
         ),
         // promptCount
@@ -117,7 +128,9 @@ export const promptRouter = createTRPCRouter({
             filterCondition,
             Prisma.empty,
             1, // limit
-            0, // page
+            0, // page,
+            pathFilter,
+            searchFilter,
           ),
         ),
       ]);
@@ -443,6 +456,16 @@ export const promptRouter = createTRPCRouter({
 
         // Unlock cache
         await promptService.unlockCache({ projectId, promptName });
+
+        // Trigger webhooks for prompt deletion
+        await Promise.all(
+          prompts.map(async (prompt) =>
+            promptChangeEventSourcing(
+              await promptService.resolvePrompt(prompt),
+              "deleted",
+            ),
+          ),
+        );
       } catch (e) {
         logger.error(e);
         throw e;
@@ -591,6 +614,12 @@ export const promptRouter = createTRPCRouter({
 
         // Unlock cache
         await promptService.unlockCache({ projectId, promptName });
+
+        // Trigger webhooks for prompt version deletion
+        await promptChangeEventSourcing(
+          await promptService.resolvePrompt(promptVersion),
+          "deleted",
+        );
       } catch (e) {
         logger.error(e);
         throw e;
@@ -614,12 +643,19 @@ export const promptRouter = createTRPCRouter({
           scope: "prompts:CUD",
         });
 
-        const toBeLabeledPrompt = await ctx.prisma.prompt.findUniqueOrThrow({
+        const toBeLabeledPrompt = await ctx.prisma.prompt.findUnique({
           where: {
             id: input.promptId,
             projectId,
           },
         });
+
+        if (!toBeLabeledPrompt) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Prompt not found.",
+          });
+        }
 
         const { name: promptName } = toBeLabeledPrompt;
         const newLabelSet = new Set(input.labels);
@@ -695,6 +731,8 @@ export const promptRouter = createTRPCRouter({
           }
         }
 
+        const touchedPromptIds = [toBeLabeledPrompt.id];
+
         await auditLog(
           {
             session: ctx.session,
@@ -718,6 +756,8 @@ export const promptRouter = createTRPCRouter({
           },
           orderBy: [{ version: "desc" }],
         });
+
+        touchedPromptIds.push(...previousLabeledPrompts.map((p) => p.id));
 
         const toBeExecuted = [
           ctx.prisma.prompt.update({
@@ -756,6 +796,24 @@ export const promptRouter = createTRPCRouter({
 
         // Unlock cache
         await promptService.unlockCache({ projectId, promptName });
+
+        // Trigger webhooks for prompt label update
+        const updatedPrompts = await ctx.prisma.prompt.findMany({
+          where: {
+            id: { in: touchedPromptIds },
+            projectId,
+          },
+        });
+
+        // Send webhooks for ALL affected prompts
+        await Promise.all(
+          updatedPrompts.map(async (prompt) =>
+            promptChangeEventSourcing(
+              await promptService.resolvePrompt(prompt),
+              "updated",
+            ),
+          ),
+        );
       } catch (e) {
         logger.error(`Failed to set prompt labels: ${e}`, e);
         throw e;
@@ -773,7 +831,7 @@ export const promptRouter = createTRPCRouter({
       const labels = await ctx.prisma.$queryRaw<{ label: string }[]>`
         SELECT DISTINCT UNNEST(labels) AS label
         FROM prompts
-        WHERE project_id = ${input.projectId}      
+        WHERE project_id = ${input.projectId}
         AND labels IS NOT NULL;
       `;
 
@@ -783,7 +841,7 @@ export const promptRouter = createTRPCRouter({
     .input(
       z.object({
         projectId: z.string(),
-        type: z.nativeEnum(PromptType).optional(),
+        type: z.enum(PromptType).optional(),
       }),
     )
     .query(async ({ input, ctx }) => {
@@ -819,7 +877,7 @@ export const promptRouter = createTRPCRouter({
       });
 
       const query = Prisma.sql`
-        SELECT 
+        SELECT
           p.name,
           array_agg(DISTINCT p.version) as "versions",
           array_agg(DISTINCT l) FILTER (WHERE l IS NOT NULL) AS "labels"
@@ -889,8 +947,24 @@ export const promptRouter = createTRPCRouter({
 
         // Unlock cache
         await promptService.unlockCache({ projectId, promptName });
-      } catch (error) {
-        logger.error(error);
+
+        // Trigger webhooks for prompt tag update
+
+        const prompts = await ctx.prisma.prompt.findMany({
+          where: { projectId, name: promptName },
+        });
+
+        await Promise.all(
+          prompts.map(async (prompt) =>
+            promptChangeEventSourcing(
+              await promptService.resolvePrompt(prompt),
+              "updated",
+            ),
+          ),
+        );
+      } catch (e) {
+        logger.error(`Failed to update prompt tags: ${e}`, e);
+        throw e;
       }
     }),
   allPromptMeta: protectedProjectProcedure
@@ -1220,6 +1294,8 @@ const generatePromptQuery = (
   orderCondition: Prisma.Sql,
   limit: number,
   page: number,
+  pathFilter: Prisma.Sql = Prisma.empty,
+  searchFilter: Prisma.Sql = Prisma.empty,
 ) => {
   return Prisma.sql`
   SELECT
@@ -1230,10 +1306,14 @@ const generatePromptQuery = (
      FROM prompts p
      WHERE "project_id" = ${projectId}
      ${filterCondition}
+     ${pathFilter}
+     ${searchFilter}
           GROUP BY name
         )
     AND "project_id" = ${projectId}
   ${filterCondition}
+  ${pathFilter}
+  ${searchFilter}
   ${orderCondition}
   LIMIT ${limit} OFFSET ${page * limit};
 `;

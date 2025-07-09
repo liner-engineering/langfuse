@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { z } from "zod";
+import { z } from "zod/v4";
 
 import { type Model } from "../../db";
 import { env } from "../../env";
@@ -45,6 +45,7 @@ const getS3StorageServiceClient = (bucketName: string): StorageService => {
   return s3StorageServiceClient;
 };
 
+// eslint-disable-next-line no-unused-vars
 export type TokenCountDelegate = (p: {
   model: Model;
   text: unknown;
@@ -229,10 +230,22 @@ export const processEventBatch = async (
     throw new Error("Redis not initialized, aborting event processing");
   }
 
-  const queue = IngestionQueue.getInstance();
+  const projectIdsToSkipS3List =
+    env.LANGFUSE_SKIP_S3_LIST_FOR_OBSERVATIONS_PROJECT_IDS?.split(",") ?? [];
+
   await Promise.all(
-    Object.keys(sortedBatchByEventBodyId).map(async (id) =>
-      queue
+    Object.keys(sortedBatchByEventBodyId).map(async (id) => {
+      const eventData = sortedBatchByEventBodyId[id];
+      const shardingKey = `${authCheck.scope.projectId}-${eventData.eventBodyId}`;
+      const queue = IngestionQueue.getInstance({ shardingKey });
+
+      const shouldSkipS3List =
+        getClickhouseEntityType(eventData.type) === "observation" &&
+        authCheck.scope.projectId !== null &&
+        (projectIdsToSkipS3List.includes(authCheck.scope.projectId) ||
+          source === "otel");
+
+      return queue
         ? queue.add(
             QueueJobs.IngestionJob,
             {
@@ -241,14 +254,10 @@ export const processEventBatch = async (
               name: QueueJobs.IngestionJob as const,
               payload: {
                 data: {
-                  type: sortedBatchByEventBodyId[id].type,
-                  eventBodyId: sortedBatchByEventBodyId[id].eventBodyId,
-                  fileKey: sortedBatchByEventBodyId[id].key,
-                  skipS3List:
-                    source === "otel" &&
-                    getClickhouseEntityType(
-                      sortedBatchByEventBodyId[id].type,
-                    ) === "observation",
+                  type: eventData.type,
+                  eventBodyId: eventData.eventBodyId,
+                  fileKey: eventData.key,
+                  skipS3List: shouldSkipS3List,
                 },
                 authCheck: authCheck as {
                   validKey: true;
@@ -261,8 +270,8 @@ export const processEventBatch = async (
             },
             { delay: getDelay(delay) },
           )
-        : Promise.reject("Failed to instantiate queue"),
-    ),
+        : Promise.reject("Failed to instantiate queue");
+    }),
   );
 
   return aggregateBatchResult(

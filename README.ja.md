@@ -26,7 +26,7 @@
       <a href="https://langfuse.com/roadmap"><strong>ロードマップ</strong></a> ·
    </div>
    <br/>
-   <span>Langfuseは、サポートと機能リクエストのために <a href="https://github.com/orgs/langfuse/discussions"><strong>Github Discussions</strong></a> を利用しています。</span>
+   <span>Langfuseは、サポートと機能リクエストのために <a href="https://github.com/orgs/langfuse/discussions"><strong>GitHub Discussions</strong></a> を利用しています。</span>
    <br/>
    <span><b>We're hiring.</b> <a href="https://langfuse.com/careers"><strong>チームに加わる</strong></a> （製品エンジニアリングおよびテクニカルGTMのポジション）への応募をお待ちしています。</span>
    <br/>
@@ -219,7 +219,7 @@ LANGFUSE_HOST="https://cloud.langfuse.com" # 🇪🇺 EUリージョン
 ```
 
 ```python:/@observe()/ /from langfuse.openai import openai/ filename="main.py"
-from langfuse.decorators import observe
+from langfuse import observe
 from langfuse.openai import openai  # OpenAI統合
 
 @observe()

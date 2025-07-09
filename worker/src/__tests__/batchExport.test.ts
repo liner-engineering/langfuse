@@ -9,7 +9,7 @@ import {
   createTrace,
   createTracesCh,
 } from "@langfuse/shared/src/server";
-import { BatchExportTableName } from "@langfuse/shared";
+import { BatchExportTableName, DatasetStatus } from "@langfuse/shared";
 import { prisma } from "@langfuse/shared/src/db";
 import { getDatabaseReadStream } from "../features/database-read-stream/getDatabaseReadStream";
 
@@ -910,5 +910,419 @@ describe("batch export test suite", () => {
     expect(rows[0].source).toBe("API");
     expect(rows[0].value).toBe(0.9);
     expect(rows[0].traceId).toBe(traces[1].id);
+  });
+
+  it("should export dataset items", async () => {
+    const { projectId } = await createOrgProjectAndApiKey();
+
+    // Create dataset 1
+    const datasetId = randomUUID();
+    await prisma.dataset.create({
+      data: {
+        id: datasetId,
+        name: "test-dataset",
+        projectId,
+        description: "Test dataset for export",
+        metadata: { purpose: "testing" },
+      },
+    });
+    // Create dataset 2
+    const datasetId2 = randomUUID();
+    await prisma.dataset.create({
+      data: {
+        id: datasetId2,
+        name: "test-dataset-2",
+        projectId,
+        description: "Invalid test dataset for export",
+        metadata: { purpose: "testing exclusion" },
+      },
+    });
+
+    // Create dataset items with different statuses and relationships
+    const datasetItems = [
+      {
+        id: randomUUID(),
+        datasetId,
+        projectId,
+        status: DatasetStatus.ACTIVE,
+        input: { question: "What is AI?" },
+        expectedOutput: { answer: "Artificial Intelligence" },
+        metadata: { category: "tech" },
+        sourceTraceId: null,
+        sourceObservationId: null,
+      },
+      {
+        id: randomUUID(),
+        datasetId,
+        projectId,
+        status: DatasetStatus.ARCHIVED,
+        input: { question: "What is ML?" },
+        expectedOutput: { answer: "Machine Learning" },
+        metadata: { category: "tech" },
+        sourceTraceId: randomUUID(),
+        sourceObservationId: randomUUID(),
+      },
+      {
+        id: randomUUID(),
+        datasetId,
+        projectId,
+        status: DatasetStatus.ACTIVE,
+        input: { question: "What is DL?" },
+        expectedOutput: { answer: "Deep Learning" },
+        metadata: { category: "advanced" },
+        sourceTraceId: randomUUID(),
+        sourceObservationId: null,
+      },
+      {
+        id: randomUUID(),
+        datasetId: datasetId2,
+        projectId,
+        status: DatasetStatus.ACTIVE,
+        input: { question: "What is DL?" },
+        expectedOutput: { answer: "Deep Learning" },
+        metadata: { category: "advanced" },
+        sourceTraceId: randomUUID(),
+        sourceObservationId: null,
+      },
+    ];
+
+    await prisma.datasetItem.createMany({ data: datasetItems });
+
+    // Export dataset items
+    const stream = await getDatabaseReadStream({
+      projectId,
+      tableName: BatchExportTableName.DatasetItems,
+      cutoffCreatedAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+      filter: [
+        {
+          type: "string",
+          operator: "=",
+          column: "datasetId",
+          value: datasetId,
+        },
+      ],
+      orderBy: { column: "createdAt", order: "DESC" },
+    });
+
+    const rows: any[] = [];
+
+    for await (const chunk of stream) {
+      rows.push(chunk);
+    }
+
+    // Should only include dataset items from the correct dataset
+    expect(rows).toHaveLength(3);
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: datasetItems[0].id,
+          datasetName: "test-dataset",
+          status: "ACTIVE",
+          sourceTraceId: null,
+          sourceObservationId: null,
+          htmlSourcePath: "",
+        }),
+        expect.objectContaining({
+          id: datasetItems[1].id,
+          datasetName: "test-dataset",
+          status: "ARCHIVED",
+          sourceTraceId: datasetItems[1].sourceTraceId,
+          sourceObservationId: datasetItems[1].sourceObservationId,
+          htmlSourcePath: `/project/${projectId}/traces/${datasetItems[1].sourceTraceId}?observation=${datasetItems[1].sourceObservationId}`,
+        }),
+        expect.objectContaining({
+          id: datasetItems[2].id,
+          datasetName: "test-dataset",
+          status: "ACTIVE",
+          sourceTraceId: datasetItems[2].sourceTraceId,
+          sourceObservationId: null,
+          htmlSourcePath: `/project/${projectId}/traces/${datasetItems[2].sourceTraceId}`,
+        }),
+      ]),
+    );
+  });
+
+  it("should export dataset items with source relationships", async () => {
+    const { projectId } = await createOrgProjectAndApiKey();
+
+    // Create dataset
+    const datasetId = randomUUID();
+    await prisma.dataset.create({
+      data: {
+        id: datasetId,
+        name: "relationship-dataset",
+        projectId,
+      },
+    });
+
+    // Create traces and observations for source relationships
+    const traceId1 = randomUUID();
+    const traceId2 = randomUUID();
+    const observationId1 = randomUUID();
+    const observationId2 = randomUUID();
+
+    const traces = [
+      createTrace({
+        project_id: projectId,
+        id: traceId1,
+        name: "source-trace-1",
+      }),
+      createTrace({
+        project_id: projectId,
+        id: traceId2,
+        name: "source-trace-2",
+      }),
+    ];
+
+    await createTracesCh(traces);
+
+    const observations = [
+      createObservation({
+        project_id: projectId,
+        trace_id: traceId1,
+        id: observationId1,
+        type: "GENERATION",
+        name: "source-observation-1",
+      }),
+      createObservation({
+        project_id: projectId,
+        trace_id: traceId2,
+        id: observationId2,
+        type: "GENERATION",
+        name: "source-observation-2",
+      }),
+    ];
+
+    await createObservationsCh(observations);
+
+    // Create dataset items with different source relationships
+    const datasetItems = [
+      {
+        id: randomUUID(),
+        datasetId,
+        projectId,
+        status: DatasetStatus.ACTIVE,
+        sourceTraceId: traceId1,
+        sourceObservationId: observationId1,
+        input: { from: "trace_and_observation" },
+      },
+      {
+        id: randomUUID(),
+        datasetId,
+        projectId,
+        status: DatasetStatus.ACTIVE,
+        sourceTraceId: traceId2,
+        sourceObservationId: null,
+        input: { from: "trace_only" },
+      },
+      {
+        id: randomUUID(),
+        datasetId,
+        projectId,
+        status: DatasetStatus.ACTIVE,
+        sourceTraceId: null,
+        sourceObservationId: null,
+        input: { from: "manual" },
+      },
+    ];
+
+    await prisma.datasetItem.createMany({ data: datasetItems });
+
+    // Export dataset items
+    const stream = await getDatabaseReadStream({
+      projectId,
+      tableName: BatchExportTableName.DatasetItems,
+      cutoffCreatedAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+      filter: [],
+      orderBy: { column: "createdAt", order: "ASC" },
+    });
+
+    const rows: any[] = [];
+
+    for await (const chunk of stream) {
+      rows.push(chunk);
+    }
+
+    expect(rows).toHaveLength(3);
+
+    // Find items by their input to verify relationships
+    const traceAndObsItem = rows.find(
+      (r) => r.input?.from === "trace_and_observation",
+    );
+    const traceOnlyItem = rows.find((r) => r.input?.from === "trace_only");
+    const manualItem = rows.find((r) => r.input?.from === "manual");
+
+    expect(traceAndObsItem).toMatchObject({
+      sourceTraceId: traceId1,
+      sourceObservationId: observationId1,
+      datasetName: "relationship-dataset",
+    });
+
+    expect(traceOnlyItem).toMatchObject({
+      sourceTraceId: traceId2,
+      sourceObservationId: null,
+      datasetName: "relationship-dataset",
+    });
+
+    expect(manualItem).toMatchObject({
+      sourceTraceId: null,
+      sourceObservationId: null,
+      datasetName: "relationship-dataset",
+    });
+  });
+
+  it("should export audit logs", async () => {
+    const { projectId, orgId } = await createOrgProjectAndApiKey();
+
+    // Create some audit log entries directly in the database
+    const auditLogEntries = [
+      {
+        id: randomUUID(),
+        projectId: projectId,
+        orgId: orgId,
+        type: "USER" as const,
+        userId: randomUUID(),
+        userOrgRole: "OWNER",
+        userProjectRole: "ADMIN",
+        resourceType: "trace",
+        resourceId: randomUUID(),
+        action: "CREATE",
+        before: null,
+        after: JSON.stringify({ name: "test-trace", version: 1 }),
+        createdAt: new Date("2024-01-01T10:00:00Z"),
+        updatedAt: new Date("2024-01-01T10:00:00Z"),
+      },
+      {
+        id: randomUUID(),
+        projectId: projectId,
+        orgId: orgId,
+        type: "API_KEY" as const,
+        apiKeyId: randomUUID(),
+        resourceType: "score",
+        resourceId: randomUUID(),
+        action: "UPDATE",
+        before: JSON.stringify({ value: 0.5 }),
+        after: JSON.stringify({ value: 0.8 }),
+        createdAt: new Date("2024-01-02T10:00:00Z"),
+        updatedAt: new Date("2024-01-02T10:00:00Z"),
+      },
+      {
+        id: randomUUID(),
+        projectId: projectId,
+        orgId: orgId,
+        type: "USER" as const,
+        userId: randomUUID(),
+        userOrgRole: "MEMBER",
+        userProjectRole: "VIEWER",
+        resourceType: "prompt",
+        resourceId: randomUUID(),
+        action: "DELETE",
+        before: JSON.stringify({ name: "old-prompt", content: "Hello World" }),
+        after: null,
+        createdAt: new Date("2024-01-03T10:00:00Z"),
+        updatedAt: new Date("2024-01-03T10:00:00Z"),
+      },
+    ];
+
+    // Insert audit log entries
+    await prisma.auditLog.createMany({
+      data: auditLogEntries,
+    });
+
+    // Export audit logs
+    const stream = await getDatabaseReadStream({
+      projectId: projectId,
+      tableName: BatchExportTableName.AuditLogs,
+      cutoffCreatedAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+      filter: [],
+      orderBy: { column: "createdAt", order: "DESC" },
+    });
+
+    const rows: any[] = [];
+
+    for await (const chunk of stream) {
+      rows.push(chunk);
+    }
+
+    expect(rows).toHaveLength(3);
+
+    // Verify the audit logs are sorted by createdAt DESC
+    expect(rows[0].action).toBe("DELETE");
+    expect(rows[0].resourceType).toBe("prompt");
+    expect(rows[0].type).toBe("USER");
+    expect(rows[0].before).toBe(
+      JSON.stringify({ name: "old-prompt", content: "Hello World" }),
+    );
+    expect(rows[0].after).toBe(null);
+
+    expect(rows[1].action).toBe("UPDATE");
+    expect(rows[1].resourceType).toBe("score");
+    expect(rows[1].type).toBe("API_KEY");
+    expect(rows[1].before).toBe(JSON.stringify({ value: 0.5 }));
+    expect(rows[1].after).toBe(JSON.stringify({ value: 0.8 }));
+
+    expect(rows[2].action).toBe("CREATE");
+    expect(rows[2].resourceType).toBe("trace");
+    expect(rows[2].type).toBe("USER");
+    expect(rows[2].before).toBe(null);
+    expect(rows[2].after).toBe(
+      JSON.stringify({ name: "test-trace", version: 1 }),
+    );
+
+    // Verify all rows have the correct project ID
+    rows.forEach((row) => {
+      expect(row.projectId).toBe(projectId);
+      expect(row.orgId).toBe(orgId);
+    });
+  });
+
+  it("should export traces with searchQuery and searchType filters applied correctly", async () => {
+    const { projectId } = await createOrgProjectAndApiKey();
+
+    // Create traces with specific searchable content
+    const traces = [
+      createTrace({
+        project_id: projectId,
+        id: "search-test-id-1",
+        name: "findable-trace-name",
+        user_id: "searchable-user-123",
+        timestamp: new Date("2024-01-01").getTime(),
+      }),
+      createTrace({
+        project_id: projectId,
+        id: "search-test-id-2",
+        name: "another-trace",
+        user_id: "different-user-456",
+        timestamp: new Date("2024-01-02").getTime(),
+      }),
+      createTrace({
+        project_id: projectId,
+        id: "other-trace-id",
+        name: "unrelated-name",
+        user_id: "unrelated-user",
+        timestamp: new Date("2024-01-03").getTime(),
+      }),
+    ];
+
+    await createTracesCh(traces);
+
+    const streamByName = await getDatabaseReadStream({
+      projectId: projectId,
+      tableName: BatchExportTableName.Traces,
+      cutoffCreatedAt: new Date(Date.now() + 1000 * 60 * 60 * 24),
+      filter: [],
+      orderBy: { column: "timestamp", order: "ASC" },
+      searchQuery: "findable-trace",
+      searchType: ["id"],
+    });
+
+    const rowsByName: any[] = [];
+    for await (const chunk of streamByName) {
+      rowsByName.push(chunk);
+    }
+
+    expect(rowsByName).toHaveLength(1);
+    expect(rowsByName[0].name).toBe("findable-trace-name");
+    expect(rowsByName[0].id).toBe("search-test-id-1");
   });
 });

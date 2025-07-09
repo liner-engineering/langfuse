@@ -6,7 +6,8 @@ import { showErrorToast } from "@/src/features/notifications/showErrorToast";
 import { showSuccessToast } from "@/src/features/notifications/showSuccessToast";
 import { type DashboardWidgetChartType } from "@langfuse/shared/src/db";
 import { type views, type metricAggregations } from "@/src/features/query";
-import { type z } from "zod";
+import { type z } from "zod/v4";
+import { type WidgetChartConfig } from "@/src/features/widgets/utils";
 
 export default function EditWidget() {
   const router = useRouter();
@@ -58,7 +59,7 @@ export default function EditWidget() {
     metrics: { measure: string; agg: string }[];
     filters: any[];
     chartType: DashboardWidgetChartType;
-    chartConfig: { type: DashboardWidgetChartType; row_limit?: number };
+    chartConfig: WidgetChartConfig;
   }) => {
     if (!widgetId) return;
 
@@ -98,6 +99,10 @@ export default function EditWidget() {
             name: widgetData.name,
             description: widgetData.description,
             view: widgetData.view as z.infer<typeof views>,
+            // Pass complete arrays for editing mode
+            metrics: widgetData.metrics,
+            dimensions: widgetData.dimensions,
+            // Keep single values for backward compatibility and fallbacks
             dimension: widgetData.dimensions.slice().shift()?.field ?? "none",
             measure: widgetData.metrics.slice().shift()?.measure ?? "count",
             aggregation:

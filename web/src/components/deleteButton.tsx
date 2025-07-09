@@ -117,7 +117,7 @@ export function DeleteButton({
       </PopoverTrigger>
       <PopoverContent onClick={(e) => e.stopPropagation()}>
         <h2 className="text-md mb-3 font-semibold">Please confirm</h2>
-        <p className="mb-3 text-sm">
+        <p className="mb-3 max-w-72 text-sm">
           {customDeletePrompt ??
             `This action cannot be undone and removes all the data associated with
             this ${entityToDeleteName}.`}
@@ -323,10 +323,6 @@ export function DeleteEvalConfigButton(props: DeleteButtonProps) {
     }
   };
 
-  const hasModelBasedEvaluationEntitlement = useHasEntitlement(
-    "model-based-evaluations",
-  );
-
   return (
     <DeleteButton
       {...props}
@@ -342,10 +338,10 @@ export function DeleteEvalConfigButton(props: DeleteButtonProps) {
           source: isTableAction ? "table-single-row" : "eval config detail",
         })
       }
+      customDeletePrompt="This action cannot be undone and removes all logs associated with this running evaluator. Scores produced by this evaluator will not be deleted."
       entityToDeleteName="running evaluator"
       executeDeleteMutation={executeDeleteMutation}
       isDeleteMutationLoading={evaluatorMutation.isLoading}
-      enabled={hasModelBasedEvaluationEntitlement}
     />
   );
 }
@@ -382,9 +378,7 @@ export function DeleteEvaluationModelButton(
     }
     onSuccess();
   };
-  const hasModelBasedEvaluationEntitlement = useHasEntitlement(
-    "model-based-evaluations",
-  );
+
   return (
     <DeleteButton
       {...props}
@@ -406,7 +400,6 @@ export function DeleteEvaluationModelButton(
       deleteConfirmation="delete"
       executeDeleteMutation={executeDeleteMutation}
       isDeleteMutationLoading={isLoading}
-      enabled={hasModelBasedEvaluationEntitlement}
     />
   );
 }

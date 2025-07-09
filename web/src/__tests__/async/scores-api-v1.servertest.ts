@@ -19,7 +19,7 @@ import {
 } from "@langfuse/shared";
 import { prisma } from "@langfuse/shared/src/db";
 import { v4 } from "uuid";
-import { z } from "zod";
+import { z } from "zod/v4";
 import waitForExpect from "wait-for-expect";
 
 describe("/api/public/scores API Endpoint", () => {
@@ -242,6 +242,67 @@ describe("/api/public/scores API Endpoint", () => {
       expect(fetchedScore.body?.environment).toBe("production");
       expect(fetchedScore.body?.metadata).toEqual({
         "test-key": "test-value-updated",
+      });
+    });
+
+    it("should post score with score config if in valid range", async () => {
+      const configId = v4();
+      const traceId = v4();
+      const scoreId = v4();
+
+      const { projectId: projectId, auth } = await createOrgProjectAndApiKey();
+
+      const config = await prisma.scoreConfig.create({
+        data: {
+          name: "score-name",
+          id: configId,
+          dataType: "NUMERIC",
+          maxValue: 100,
+          projectId: projectId,
+        },
+      });
+
+      const trace = createTrace({
+        id: traceId,
+        project_id: projectId,
+      });
+      await createTracesCh([trace]);
+
+      const score = createTraceScore({
+        id: scoreId,
+        project_id: projectId,
+        trace_id: traceId,
+        name: "score-name",
+        value: 100,
+        source: "API",
+        comment: "comment",
+        metadata: { "test-key": "test-value" },
+        observation_id: null,
+        environment: "production",
+        config_id: config.id,
+      });
+      await createScoresCh([score]);
+
+      const fetchedScore = await makeZodVerifiedAPICall(
+        GetScoreResponseV1,
+        "GET",
+        `/api/public/scores/${scoreId}`,
+        undefined,
+        auth,
+      );
+
+      expect(fetchedScore.body?.id).toBe(scoreId);
+      expect(fetchedScore.body?.traceId).toBe(traceId);
+      expect(fetchedScore.body?.name).toBe("score-name");
+      expect(fetchedScore.body?.value).toBe(100);
+      expect(fetchedScore.body?.configId).toBe(configId);
+      expect(fetchedScore.body?.observationId).toBeNull();
+      expect(fetchedScore.body?.comment).toBe("comment");
+      expect(fetchedScore.body?.source).toBe("API");
+      expect(fetchedScore.body?.projectId).toBe(projectId);
+      expect(fetchedScore.body?.environment).toBe("production");
+      expect(fetchedScore.body?.metadata).toEqual({
+        "test-key": "test-value",
       });
     });
   });
@@ -916,7 +977,7 @@ describe("/api/public/scores API Endpoint", () => {
             );
           } catch (error) {
             expect((error as Error).message).toBe(
-              `API call did not return 200, returned status 400, body {\"message\":\"Invalid request data\",\"error\":[{\"received\":\"op\",\"code\":\"invalid_enum_value\",\"options\":[\"<\",\">\",\"<=\",\">=\",\"!=\",\"=\"],\"path\":[\"operator\"],\"message\":\"Invalid enum value. Expected '<' | '>' | '<=' | '>=' | '!=' | '=', received 'op'\"}]}`,
+              `API call did not return 200, returned status 400, body {\"message\":\"Invalid request data\",\"error\":[{\"code\":\"invalid_value\",\"values\":[\"<\",\">\",\"<=\",\">=\",\"!=\",\"=\"],\"path\":[\"operator\"],\"message\":\"Invalid option: expected one of \\\"<\\\"|\\\">\\\"|\\\"<=\\\"|\\\">=\\\"|\\\"!=\\\"|\\\"=\\\"\"}]}`,
             );
           }
         });
@@ -935,7 +996,7 @@ describe("/api/public/scores API Endpoint", () => {
             );
           } catch (error) {
             expect((error as Error).message).toBe(
-              'API call did not return 200, returned status 400, body {"message":"Invalid request data","error":[{"code":"invalid_type","expected":"number","received":"nan","path":["value"],"message":"Expected number, received nan"}]}',
+              'API call did not return 200, returned status 400, body {"message":"Invalid request data","error":[{"expected":"number","code":"invalid_type","received":"NaN","path":["value"],"message":"Invalid input: expected number, received NaN"}]}',
             );
           }
         });

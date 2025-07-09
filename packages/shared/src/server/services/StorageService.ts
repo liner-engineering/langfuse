@@ -28,20 +28,21 @@ type UploadFile = {
 };
 
 export interface StorageService {
-  uploadFile(params: UploadFile): Promise<{ signedUrl: string }>;
+  uploadFile(params: UploadFile): Promise<{ signedUrl: string }>; // eslint-disable-line no-unused-vars
 
-  uploadJson(path: string, body: Record<string, unknown>[]): Promise<void>;
+  uploadJson(path: string, body: Record<string, unknown>[]): Promise<void>; // eslint-disable-line no-unused-vars
 
-  download(path: string): Promise<string>;
+  download(path: string): Promise<string>; // eslint-disable-line no-unused-vars
 
-  listFiles(prefix: string): Promise<{ file: string; createdAt: Date }[]>;
+  listFiles(prefix: string): Promise<{ file: string; createdAt: Date }[]>; // eslint-disable-line no-unused-vars
 
   getSignedUrl(
-    fileName: string,
-    ttlSeconds: number,
-    asAttachment?: boolean,
+    fileName: string, // eslint-disable-line no-unused-vars
+    ttlSeconds: number, // eslint-disable-line no-unused-vars
+    asAttachment?: boolean, // eslint-disable-line no-unused-vars
   ): Promise<string>;
 
+  // eslint-disable-next-line no-unused-vars
   getSignedUploadUrl(params: {
     path: string;
     ttlSeconds: number;
@@ -50,7 +51,7 @@ export interface StorageService {
     contentLength: number;
   }): Promise<string>;
 
-  deleteFiles(paths: string[]): Promise<void>;
+  deleteFiles(paths: string[]): Promise<void>; // eslint-disable-line no-unused-vars
 }
 
 export class StorageServiceFactory {
@@ -460,7 +461,7 @@ class S3StorageService implements StorageService {
       return { signedUrl };
     } catch (err) {
       logger.error(`Failed to upload file to ${fileName}`, err);
-      throw new Error("Failed to upload to S3 or generate signed URL");
+      throw new Error(`Failed to upload to S3 or generate signed URL: ${err}`);
     }
   }
 
@@ -503,6 +504,7 @@ class S3StorageService implements StorageService {
     const listCommand = new ListObjectsV2Command({
       Bucket: this.bucketName,
       Prefix: prefix,
+      MaxKeys: env.LANGFUSE_S3_LIST_MAX_KEYS,
     });
 
     try {

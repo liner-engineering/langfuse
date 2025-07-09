@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 
 export const BedrockConfigSchema = z.object({ region: z.string() });
 export type BedrockConfig = z.infer<typeof BedrockConfigSchema>;
@@ -10,6 +10,9 @@ export const BedrockCredentialSchema = z
   })
   .optional();
 export type BedrockCredential = z.infer<typeof BedrockCredentialSchema>;
+
+export const VertexAIConfigSchema = z.object({ location: z.string() });
+export type VertexAIConfig = z.infer<typeof VertexAIConfigSchema>;
 
 export const GCPServiceAccountKeySchema = z.object({
   type: z.literal("service_account"),

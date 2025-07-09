@@ -29,6 +29,8 @@ import {
   logger,
   BlobStorageIntegrationQueue,
   DeadLetterRetryQueue,
+  IngestionQueue,
+  webhookProcessor,
 } from "@langfuse/shared/src/server";
 import { env } from "./env";
 import { ingestionQueueProcessorBuilder } from "./queues/ingestionQueue";
@@ -52,7 +54,8 @@ import {
 } from "./queues/dataRetentionQueue";
 import { batchActionQueueProcessor } from "./queues/batchActionQueue";
 import { scoreDeleteProcessor } from "./queues/scoreDelete";
-import { DlxRetryService } from "./services/dlx/dlxRetryService";
+import { DlqRetryService } from "./services/dlq/dlqRetryService";
+import { entityChangeQueueProcessor } from "./queues/entityChangeQueue";
 
 const app = express();
 
@@ -202,13 +205,17 @@ if (env.QUEUE_CONSUMER_BATCH_ACTION_QUEUE_IS_ENABLED === "true") {
 }
 
 if (env.QUEUE_CONSUMER_INGESTION_QUEUE_IS_ENABLED === "true") {
-  WorkerManager.register(
-    QueueName.IngestionQueue,
-    ingestionQueueProcessorBuilder(true), // this might redirect to secondary queue
-    {
-      concurrency: env.LANGFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY,
-    },
-  );
+  // Register workers for all ingestion queue shards
+  const shardNames = IngestionQueue.getShardNames();
+  shardNames.forEach((shardName) => {
+    WorkerManager.register(
+      shardName as QueueName,
+      ingestionQueueProcessorBuilder(true), // this might redirect to secondary queue
+      {
+        concurrency: env.LANGFUSE_INGESTION_QUEUE_PROCESSING_CONCURRENCY,
+      },
+    );
+  });
 }
 
 if (env.QUEUE_CONSUMER_INGESTION_SECONDARY_QUEUE_IS_ENABLED === "true") {
@@ -310,6 +317,12 @@ if (env.QUEUE_CONSUMER_DATA_RETENTION_QUEUE_IS_ENABLED === "true") {
     dataRetentionProcessingProcessor,
     {
       concurrency: 1,
+      limiter: {
+        // Process at most `max` delete jobs per LANGFUSE_CLICKHOUSE_PROJECT_DELETION_CONCURRENCY_DURATION_MS (default 10 min)
+        max: env.LANGFUSE_PROJECT_DELETE_CONCURRENCY,
+        duration:
+          env.LANGFUSE_CLICKHOUSE_PROJECT_DELETION_CONCURRENCY_DURATION_MS,
+      },
     },
   );
 }
@@ -320,9 +333,25 @@ if (env.QUEUE_CONSUMER_DEAD_LETTER_RETRY_QUEUE_IS_ENABLED === "true") {
 
   WorkerManager.register(
     QueueName.DeadLetterRetryQueue,
-    DlxRetryService.retryDeadLetterQueue,
+    DlqRetryService.retryDeadLetterQueue,
     {
       concurrency: 1,
+    },
+  );
+}
+
+if (env.QUEUE_CONSUMER_WEBHOOK_QUEUE_IS_ENABLED === "true") {
+  WorkerManager.register(QueueName.WebhookQueue, webhookProcessor, {
+    concurrency: env.LANGFUSE_WEBHOOK_QUEUE_PROCESSING_CONCURRENCY,
+  });
+}
+
+if (env.QUEUE_CONSUMER_ENTITY_CHANGE_QUEUE_IS_ENABLED === "true") {
+  WorkerManager.register(
+    QueueName.EntityChangeQueue,
+    entityChangeQueueProcessor,
+    {
+      concurrency: env.LANGFUSE_ENTITY_CHANGE_QUEUE_PROCESSING_CONCURRENCY,
     },
   );
 }

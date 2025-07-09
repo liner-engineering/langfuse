@@ -1,7 +1,8 @@
 import { useRouter } from "next/router";
 import { useCallback, useState } from "react";
+import { getPathnameWithoutBasePath } from "@/src/utils/api";
 
-export const useDatasetComparePeekState = (pathname: string) => {
+export const useDatasetComparePeekState = () => {
   const router = useRouter();
   const { peek: datasetItem } = router.query;
 
@@ -15,6 +16,7 @@ export const useDatasetComparePeekState = (pathname: string) => {
     (open: boolean, itemId?: string) => {
       const url = new URL(window.location.href);
       const params = new URLSearchParams(url.search);
+      const pathname = getPathnameWithoutBasePath();
 
       if (!open || !itemId) {
         // close peek view
@@ -35,7 +37,7 @@ export const useDatasetComparePeekState = (pathname: string) => {
         { shallow: true },
       );
     },
-    [router, datasetItem, pathname],
+    [router, datasetItem],
   );
 
   return {

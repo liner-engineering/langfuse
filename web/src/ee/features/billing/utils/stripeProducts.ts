@@ -1,6 +1,10 @@
 import { env } from "@/src/env.mjs";
 import { type Plan } from "@langfuse/shared";
 
+const isTestEnvironment =
+  env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "DEV" ||
+  env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "STAGING";
+
 type StripeProduct = {
   stripeProductId: string;
   mappedPlan: Plan;
@@ -17,18 +21,16 @@ type StripeProduct = {
 // map of planid to plan name
 export const stripeProducts: StripeProduct[] = [
   {
-    stripeProductId:
-      env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "DEV" ||
-      env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "STAGING"
-        ? "prod_RoBuRrXjIUBIJ8" // test
-        : "prod_RoYirvRQ4Kc6po", // live
+    stripeProductId: isTestEnvironment
+      ? "prod_RoBuRrXjIUBIJ8" // test
+      : "prod_RoYirvRQ4Kc6po", // live
     mappedPlan: "cloud:core",
     checkout: {
       title: "Core",
       description:
         "Great to get started for most projects with unlimited users and 90 days data access.",
       price: "$59 / month",
-      usagePrice: "$8/100k events (100k included)",
+      usagePrice: "$8-6/100k units (100k included, graduated pricing)",
       mainFeatures: [
         "90 days data access",
         "Unlimited users",
@@ -38,18 +40,16 @@ export const stripeProducts: StripeProduct[] = [
     },
   },
   {
-    stripeProductId:
-      env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "DEV" ||
-      env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "STAGING"
-        ? "prod_QgDNYKXcBfvUQ3" // test
-        : "prod_QhK7UMhrkVeF6R", // live
+    stripeProductId: isTestEnvironment
+      ? "prod_QgDNYKXcBfvUQ3" // test
+      : "prod_QhK7UMhrkVeF6R", // live
     mappedPlan: "cloud:pro",
     checkout: {
       title: "Pro",
       description:
         "For projects that scale and need unlimited data access, high rate limits, and Slack support.",
       price: "$199 / month",
-      usagePrice: "$8/100k events (100k included)",
+      usagePrice: "$8-6/100k units (100k included, graduated pricing)",
       mainFeatures: [
         "Everything in Core",
         "Unlimited data access",
@@ -61,17 +61,15 @@ export const stripeProducts: StripeProduct[] = [
     },
   },
   {
-    stripeProductId:
-      env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "DEV" ||
-      env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "STAGING"
-        ? "prod_QgDOxTD64U6KDv" // test
-        : "prod_QhK9qKGH25BTcS", // live
+    stripeProductId: isTestEnvironment
+      ? "prod_QgDOxTD64U6KDv" // test
+      : "prod_QhK9qKGH25BTcS", // live
     mappedPlan: "cloud:team",
     checkout: {
-      title: "Team",
+      title: "Pro + Teams Add-on",
       description: "Organizational and security controls for larger teams.",
       price: "$499 / month",
-      usagePrice: "$8/100k events (100k included)",
+      usagePrice: "$8-6/100k units (100k included, graduated pricing)",
       mainFeatures: [
         "Everything in Pro",
         "Enterprise SSO (e.g. Okta)",
@@ -80,6 +78,13 @@ export const stripeProducts: StripeProduct[] = [
         "Data retention management",
       ],
     },
+  },
+  {
+    stripeProductId: isTestEnvironment
+      ? "prod_SToP5nTZpC4yO8" // test
+      : "prod_STnXok7GSSDmyF", // live
+    mappedPlan: "cloud:enterprise",
+    checkout: null,
   },
 ];
 

@@ -42,7 +42,7 @@ A good first step is to search for open [issues](https://github.com/langfuse/lan
   - NextAuth.js / Auth.js
   - tRPC: Frontend APIs
   - Prisma ORM
-  - Zod
+  - Zod v4
   - Tailwind CSS
   - shadcn/ui tailwind components (using Radix and tanstack)
   - Fern: generate OpenAPI spec and Pydantic models
@@ -58,16 +58,30 @@ See this [diagram](https://langfuse.com/self-hosting#architecture) for an overvi
 ### Network Overview
 
 ```mermaid
-flowchart LR
-   Browser ---|Web UI & TRPC API| App
-   Integrations/SDKs ---|Public HTTP API| App
-   subgraph i1["Application Network"]
-      App["Langfuse Application"]
-   end
-   subgraph i2["Database Network"]
-      DB["Postgres Database"]
-   end
-   App --- DB
+flowchart TB
+    User["UI, API, SDKs"]
+    subgraph vpc["VPC"]
+        Web["Web Server<br/>(langfuse/langfuse)"]
+        Worker["Async Worker<br/>(langfuse/worker)"]
+        Postgres["Postgres - OLTP<br/>(Transactional Data)"]
+        Cache["Redis/Valkey<br/>(Cache, Queue)"]
+        Clickhouse["Clickhouse - OLAP<br/>(Observability Data)"]
+        S3["S3 / Blob Storage<br/>(Raw events, multi-modal attachments)"]
+    end
+    LLM["LLM API/Gateway<br/>(optional)"]
+
+    User --> Web
+    Web --> S3
+    Web --> Postgres
+    Web --> Cache
+    Web --> Clickhouse
+    Web -.->|"optional for playground"| LLM
+
+    Cache --> Worker
+    Worker --> Clickhouse
+    Worker --> Postgres
+    Worker --> S3
+    Worker -.->|"optional for evals"| LLM
 ```
 
 ### Database Overview
@@ -110,16 +124,24 @@ Requirements
    cd langfuse
    ```
 
-3. Create an env file
+3. Install dependencies and set up pre-commit hooks
+
+   ```bash
+   pnpm install
+   pnpm run prepare  # Sets up Husky pre-commit hooks for code formatting
+   ```
+
+4. Create an env file
 
    ```bash
     cp .env.dev.example .env
    ```
 
-4. Run the entire infrastructure in dev mode
+4. Run the entire infrastructure in dev mode. **Note**: if you have an existing database, this command wipes it.
 
    ```bash
-   pnpm run dx
+   pnpm run dx # first run only (resets db, docker containers, etc...)
+   pnpm run dev # any subsequent runs
    ```
 
    You will be asked whether you want to reset Postgres and ClickHouse. Confirm both with 'Y' and press enter.
@@ -133,6 +155,12 @@ Requirements
 
    - Username: `demo@langfuse.com`
    - Password: `password`
+
+To get comprehensive example data, you can use the `seed` command:
+
+```sh
+pnpm run db:seed:examples
+```
 
 ## Monorepo quickstart
 
@@ -183,23 +211,65 @@ Requirements
 
 On the main branch, we adhere to the best practices of [conventional commits](https://www.conventionalcommits.org/en/v1.0.0/). All pull requests and branches are squash-merged to maintain a clean and readable history. This approach ensures the addition of a conventional commit message when merging contributions.
 
-## Test the public API
+## Running Unit Tests
 
-The API is tested using Jest. With the development server running, you can run the tests with:
+All tests run in the CI and must pass before merging.
+All tests run against a running langfuse instance and **write/delete real data from the database**.
 
-Run all
+### Test Database Setup
 
-```bash
-npm run test
-```
-
-Run interactively in watch mode
+Per default, the tests use the local development database. Therefore, wiping your data in the process.
+For proper test isolation, create a `.env.test` file in the root directory:
 
 ```bash
-npm run test:watch
+cp .env.test.example .env.test
 ```
 
-These tests are also run in CI.
+Then, a different PostgreSQL and Redis are used for the tests.
+The `.env.test` file only overrides the set values and falls back on `.env` for all undefined values.
+
+- **PostgreSQL**: Uses separate `langfuse_test` database for isolation
+- **ClickHouse**: Uses shared `default` database for now
+- **Redis**: Uses database 1 instead of 0 for isolation (Redis data is not cleaned between tests)
+
+Tests automatically create the PostgreSQL test database if it doesn't exist and clean up data between runs.
+
+### Tests in the `web` package (public API)
+
+We're using Jest with in the `web` package. Therefore, if you want to provide an argument to the test runner, do it directly without an intermittent `--`.
+
+There are three types of unit tests:
+
+- `test-sync`
+- `test-async`
+- `test-client`
+
+To run a specific test, for example the test: `"should handle special characters in prompt names"` in `prompts.v2.servertest.ts`, run:
+
+```sh
+cd web  # or with --filter=web
+pnpm test-sync --testPathPattern="prompts\.v2\.servertest" --testNamePattern="should handle special characters in prompt names"
+```
+
+To run all tests:
+
+```sh
+pnpm run test
+```
+
+Run interactively in watch mode (not recommended!)
+
+```sh
+pnpm run test:watch
+```
+
+### Tests in the `worker` package
+
+For the `worker` package, we're using `vitest` to run unit tests.
+
+```sh
+pnpm run test --filter=worker -- FILE_YOU_WANT_TO_TEST.ts -t "test name"
+```
 
 ## CI/CD
 
@@ -326,6 +396,20 @@ Please note that
 ### Transition period until V3 release
 
 Until the V3 release, both the JSON record must be updated **and** a migration must be created to continue supporting self-hosted users. Note that the migration must updated both the `models` as well as the `prices` table accordingly.
+
+## Updating the OpenAPI Specs & fern SDKs
+
+We maintain the API specifications manually to guarantee a high degree of understandability. If you made changes to the API, please update the respective `.yml` files in `fern/apis/...`.
+
+To generate the respective `openapi.yml` files which power the online API reference & SDKs, run:
+
+```sh
+npx fern-api generate --api server  # for the server API
+npx fern-api generate --api client  # for the client API
+npx fern-api generate --api organizations  # for the organizations API
+```
+
+**Note:** You need a signed in fern account to run those commands.
 
 ## License
 

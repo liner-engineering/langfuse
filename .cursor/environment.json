@@ -1,0 +1,14 @@
+{
+  "install": "cp .env.dev.example .env && pnpm i",
+  "build": {
+    "context": ".",
+    "dockerfile": "Dockerfile"
+  },
+  "start": "sudo service docker start",
+  "terminals": [
+    {
+      "name": "dev server",
+      "command": "pnpm run dx-f"
+    }
+  ]
+}

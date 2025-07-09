@@ -1,7 +1,7 @@
 import { useRouter } from "next/router";
 import Page from "@/src/components/layouts/page";
 import { api } from "@/src/utils/api";
-import { WidgetForm } from "@/src/features/widgets";
+import { type WidgetChartConfig, WidgetForm } from "@/src/features/widgets";
 import { showSuccessToast } from "@/src/features/notifications/showSuccessToast";
 import { showErrorToast } from "@/src/features/notifications/showErrorToast";
 import { type DashboardWidgetChartType } from "@langfuse/shared/src/db";
@@ -9,7 +9,7 @@ import {
   type views,
   type metricAggregations,
 } from "@/src/features/query/types";
-import { type z } from "zod";
+import { type z } from "zod/v4";
 import { SelectDashboardDialog } from "@/src/features/dashboard/components/SelectDashboardDialog";
 import { useState } from "react";
 
@@ -49,7 +49,7 @@ export default function NewWidget() {
     metrics: { measure: string; agg: string }[];
     filters: any[];
     chartType: DashboardWidgetChartType;
-    chartConfig: { type: DashboardWidgetChartType; row_limit?: number };
+    chartConfig: WidgetChartConfig;
   }) => {
     if (!widgetData.name.trim()) {
       showErrorToast("Error", "Widget name is required");
@@ -98,6 +98,7 @@ export default function NewWidget() {
           aggregation: "count",
           filters: [],
           chartType: "LINE_TIME_SERIES",
+          chartConfig: { type: "LINE_TIME_SERIES" },
         }}
         widgetId={undefined}
       />

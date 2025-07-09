@@ -875,14 +875,13 @@ paths:
           schema:
             type: integer
             nullable: true
-        - name: response
-          in: query
-          required: true
-          schema:
-            $ref: '#/components/schemas/PaginatedDatasetRunItems'
       responses:
-        '204':
+        '200':
           description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedDatasetRunItems'
         '400':
           description: ''
           content:
@@ -1589,7 +1588,7 @@ paths:
               "metrics": [              // Required. At least one metric must be provided
                 {
                   "measure": string,    // What to measure, e.g. "count", "latency", "value"
-                  "aggregation": string // How to aggregate, e.g. "count", "sum", "avg", "p95"
+                  "aggregation": string // How to aggregate, e.g. "count", "sum", "avg", "p95", "histogram"
                 }
               ],
               "filters": [              // Optional. Default: []
@@ -1611,7 +1610,11 @@ paths:
                   "field": string,      // Field to order by
                   "direction": string   // "asc" or "desc"
                 }
-              ]
+              ],
+              "config": {               // Optional. Query-specific configuration
+                "bins": number,         // Optional. Number of bins for histogram (1-100), default: 10
+                "row_limit": number     // Optional. Row limit for results (1-1000)
+              }
             }
 
             ```
@@ -4041,6 +4044,17 @@ paths:
             items:
               type: string
               nullable: true
+        - name: fields
+          in: query
+          description: >-
+            Comma-separated list of fields to include in the response. Available
+            field groups are 'core' (always included), 'io' (input, output,
+            metadata), 'scores', 'observations', 'metrics'. If not provided, all
+            fields are included. Example: 'core,scores,metrics'
+          required: false
+          schema:
+            type: string
+            nullable: true
       responses:
         '200':
           description: ''
@@ -5268,19 +5282,19 @@ components:
           type: number
           format: double
           nullable: true
-          description: Price (USD) per input unit
+          description: Deprecated. See 'prices' instead. Price (USD) per input unit
         outputPrice:
           type: number
           format: double
           nullable: true
-          description: Price (USD) per output unit
+          description: Deprecated. See 'prices' instead. Price (USD) per output unit
         totalPrice:
           type: number
           format: double
           nullable: true
           description: >-
-            Price (USD) per total unit. Cannot be set if input or output price
-            is set.
+            Deprecated. See 'prices' instead. Price (USD) per total unit. Cannot
+            be set if input or output price is set.
         tokenizerId:
           type: string
           nullable: true
@@ -5294,11 +5308,26 @@ components:
             JSON. See docs for more details.
         isLangfuseManaged:
           type: boolean
+        prices:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ModelPrice'
+          description: Price (USD) by usage type
       required:
         - id
         - modelName
         - matchPattern
         - isLangfuseManaged
+        - prices
+    ModelPrice:
+      title: ModelPrice
+      type: object
+      properties:
+        price:
+          type: number
+          format: double
+      required:
+        - price
     ModelUsageUnit:
       title: ModelUsageUnit
       type: string
@@ -6334,6 +6363,8 @@ components:
             and dimensions requested in the query.
 
             Format varies based on the query parameters.
+
+            Histograms will return an array with [lower, upper, height] tuples.
       required:
         - data
     PaginatedModels:
@@ -6535,6 +6566,7 @@ components:
           description: Metadata for the project
         retentionDays:
           type: integer
+          nullable: true
           description: >-
             Number of days to retain data. Null or 0 means no retention. Omitted
             if no retention is configured.
@@ -6542,7 +6574,6 @@ components:
         - id
         - name
         - metadata
-        - retentionDays
     ProjectDeletionResponse:
       title: ProjectDeletionResponse
       type: object
@@ -6708,7 +6739,7 @@ components:
         prompt:
           type: array
           items:
-            $ref: '#/components/schemas/ChatMessage'
+            $ref: '#/components/schemas/ChatMessageWithPlaceholders'
         config:
           nullable: true
         labels:
@@ -6822,6 +6853,31 @@ components:
         - config
         - labels
         - tags
+    ChatMessageWithPlaceholders:
+      title: ChatMessageWithPlaceholders
+      oneOf:
+        - type: object
+          allOf:
+            - type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - chatmessage
+            - $ref: '#/components/schemas/ChatMessage'
+          required:
+            - type
+        - type: object
+          allOf:
+            - type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - placeholder
+            - $ref: '#/components/schemas/PlaceholderMessage'
+          required:
+            - type
     ChatMessage:
       title: ChatMessage
       type: object
@@ -6833,6 +6889,14 @@ components:
       required:
         - role
         - content
+    PlaceholderMessage:
+      title: PlaceholderMessage
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+        - name
     TextPrompt:
       title: TextPrompt
       type: object
@@ -6850,7 +6914,7 @@ components:
         prompt:
           type: array
           items:
-            $ref: '#/components/schemas/ChatMessage'
+            $ref: '#/components/schemas/ChatMessageWithPlaceholders'
       required:
         - prompt
       allOf:

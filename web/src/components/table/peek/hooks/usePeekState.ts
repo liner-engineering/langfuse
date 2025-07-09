@@ -1,7 +1,8 @@
 import { useRouter } from "next/router";
 import { useCallback } from "react";
+import { getPathnameWithoutBasePath } from "@/src/utils/api";
 
-export const usePeekState = (pathname: string) => {
+export const usePeekState = () => {
   const router = useRouter();
   const { peek } = router.query;
 
@@ -9,6 +10,7 @@ export const usePeekState = (pathname: string) => {
     (open: boolean, id?: string) => {
       const url = new URL(window.location.href);
       const params = new URLSearchParams(url.search);
+      const pathname = getPathnameWithoutBasePath();
 
       if (!open || !id) {
         // close peek view
@@ -29,7 +31,7 @@ export const usePeekState = (pathname: string) => {
         { shallow: true },
       );
     },
-    [router, pathname, peek],
+    [router, peek],
   );
 
   return {

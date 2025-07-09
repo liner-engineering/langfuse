@@ -10,14 +10,14 @@ import { type MediaReturnType } from "@/src/features/media/validation";
 import { useMarkdownContext } from "@/src/features/theming/useMarkdownContext";
 import { Check, Copy } from "lucide-react";
 import { useMemo, useState } from "react";
-import { type z } from "zod";
+import { type z } from "zod/v4";
 import { BsMarkdown } from "react-icons/bs";
 import { cn } from "@/src/utils/tailwind";
 
 type MarkdownJsonViewHeaderProps = {
   title: string;
   handleOnValueChange: () => void;
-  handleOnCopy: () => void;
+  handleOnCopy: (event?: React.MouseEvent<HTMLButtonElement>) => void;
   canEnableMarkdown?: boolean;
   controlButtons?: React.ReactNode;
 };
@@ -57,9 +57,9 @@ export function MarkdownJsonViewHeader({
           variant="ghost"
           size="icon-xs"
           type="button"
-          onClick={() => {
+          onClick={(event) => {
             setIsCopied(true);
-            handleOnCopy();
+            handleOnCopy(event);
             setTimeout(() => setIsCopied(false), 1000);
           }}
           className="-mr-2 hover:bg-border"
@@ -77,10 +77,7 @@ export function MarkdownJsonViewHeader({
 
 const isSupportedMarkdownFormat = (
   content: unknown,
-  contentValidation: z.SafeParseReturnType<
-    string,
-    z.infer<typeof OpenAIContentSchema>
-  >,
+  contentValidation: z.ZodSafeParseResult<z.infer<typeof OpenAIContentSchema>>,
 ): content is z.infer<typeof OpenAIContentSchema> => contentValidation.success;
 
 // MarkdownJsonView will render markdown if `isMarkdownEnabled` (global context) is true and the content is valid markdown

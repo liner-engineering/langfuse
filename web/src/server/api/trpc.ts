@@ -17,10 +17,9 @@
 import { type CreateNextContextOptions } from "@trpc/server/adapters/next";
 import { type Session } from "next-auth";
 import { tracing } from "@baselime/trpc-opentelemetry-middleware";
-import { contextWithLangfuseProps } from "@langfuse/shared/src/server";
 import { getServerAuthSession } from "@/src/server/auth";
 import { prisma, Role } from "@langfuse/shared/src/db";
-import * as z from "zod";
+import * as z from "zod/v4";
 import * as opentelemetry from "@opentelemetry/api";
 import { type IncomingHttpHeaders } from "node:http";
 
@@ -63,6 +62,11 @@ export const createTRPCContext = async (opts: CreateNextContextOptions) => {
   // Get the headers from the request
   const headers = req.headers;
 
+  addUserToSpan({
+    userId: session?.user?.id,
+    email: session?.user?.email ?? undefined,
+  });
+
   return createInnerTRPCContext({ session, headers });
 };
 
@@ -75,10 +79,15 @@ export const createTRPCContext = async (opts: CreateNextContextOptions) => {
  */
 import { initTRPC, TRPCError } from "@trpc/server";
 import superjson from "superjson";
-import { ZodError } from "zod";
+import { ZodError } from "zod/v4";
 import { setUpSuperjson } from "@/src/utils/superjson";
 import { DB } from "@/src/server/db";
-import { getTraceById, logger } from "@langfuse/shared/src/server";
+import {
+  getTraceById,
+  logger,
+  addUserToSpan,
+  contextWithLangfuseProps,
+} from "@langfuse/shared/src/server";
 
 setUpSuperjson();
 
@@ -115,10 +124,17 @@ const withErrorHandling = t.middleware(async ({ ctx, next }) => {
   const res = await next({ ctx }); // pass the context to the next middleware
 
   if (!res.ok) {
-    logger.error(
-      `middleware intercepted error with code ${res.error.code}`,
-      res.error,
-    );
+    if (res.error.code === "NOT_FOUND" || res.error.code === "UNAUTHORIZED") {
+      logger.info(
+        `middleware intercepted error with code ${res.error.code}`,
+        res.error,
+      );
+    } else {
+      logger.error(
+        `middleware intercepted error with code ${res.error.code}`,
+        res.error,
+      );
+    }
 
     // Throw a new TRPC error with:
     // - The same error code as the original error
@@ -255,7 +271,7 @@ const enforceUserIsAuthedAndProjectMember = t.middleware(
         });
       }
       // not a member
-      logger.error(`User is not a member of this project with id ${projectId}`);
+      logger.warn(`User is not a member of this project with id ${projectId}`);
       throw new TRPCError({
         code: "UNAUTHORIZED",
         message: "User is not a member of this project",

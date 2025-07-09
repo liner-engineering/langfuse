@@ -1,4 +1,4 @@
-import { type z } from "zod";
+import { type z } from "zod/v4";
 import {
   type views,
   type ViewDeclarationType,
@@ -55,20 +55,6 @@ export const traceView: ViewDeclarationType = {
       sql: "environment",
       type: "string",
       description: "Deployment environment (e.g., production, staging).",
-    },
-    observationName: {
-      sql: "name",
-      alias: "observationName",
-      type: "string",
-      relationTable: "observations",
-      description: "Name of the observation.",
-    },
-    scoreName: {
-      sql: "name",
-      alias: "scoreName",
-      type: "string",
-      relationTable: "scores",
-      description: "Name of the score.",
     },
   },
   measures: {
@@ -247,13 +233,6 @@ export const observationsView: ViewDeclarationType = {
       type: "string",
       relationTable: "traces",
       description: "Version of the parent trace.",
-    },
-    scoreName: {
-      sql: "name",
-      alias: "scoreName",
-      type: "string",
-      relationTable: "scores",
-      description: "Name of the score.",
     },
   },
   measures: {
@@ -501,6 +480,11 @@ export const scoresNumericView: ViewDeclarationType = {
     "Scores are flexible objects that are used for evaluations. This view contains numeric scores.",
   dimensions: {
     ...scoreBaseDimensions,
+    value: {
+      sql: "value",
+      type: "number",
+      description: "Value of the score.",
+    },
   },
   measures: {
     count: {

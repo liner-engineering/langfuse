@@ -14,28 +14,21 @@ import { PanelLeftOpen, PanelLeftClose, ListTree } from "lucide-react";
 import { cn } from "@/src/utils/tailwind";
 import { Command } from "@/src/components/ui/command";
 import DocPopup from "@/src/components/layouts/doc-popup";
-import type {
-  DatasetCompareRunRowData,
-  DatasetRunMetric,
-} from "@/src/features/datasets/components/DatasetCompareRunsTable";
+import type { DatasetCompareRunRowData } from "@/src/features/datasets/components/DatasetCompareRunsTable";
 import { useRouter } from "next/router";
 import { usePeekData } from "@/src/components/table/peek/hooks/usePeekData";
 
 export type PeekDatasetCompareDetailProps = {
   projectId: string;
-  datasetId: string;
   runsData: RouterOutputs["datasets"]["baseRunDataByDatasetId"];
   scoreKeyToDisplayName: Map<string, string>;
-  selectedMetrics?: DatasetRunMetric[];
   row?: DatasetCompareRunRowData;
 };
 
 export const PeekDatasetCompareDetail = ({
   projectId,
-  datasetId,
   runsData,
   scoreKeyToDisplayName,
-  selectedMetrics = ["scores", "resourceMetrics"],
   row,
 }: PeekDatasetCompareDetailProps) => {
   const router = useRouter();
@@ -46,9 +39,7 @@ export const PeekDatasetCompareDetail = ({
       : undefined;
 
   const { datasetItemId, selectedRunItemProps, setSelectedRunItemProps } =
-    useDatasetComparePeekState(
-      `/project/${projectId}/datasets/${datasetId}/compare`,
-    );
+    useDatasetComparePeekState();
   const { runId, traceId } = selectedRunItemProps ?? {};
 
   const trace = usePeekData({
@@ -76,12 +67,11 @@ export const PeekDatasetCompareDetail = ({
   };
 
   const handleSetCurrentObservationId = (id?: string) => {
-    if (id && traceId)
-      window.open(
-        `/project/${projectId}/traces/${encodeURIComponent(traceId)}?observation=${encodeURIComponent(id)}`,
-        "_blank",
-        "noopener noreferrer",
-      );
+    if (id && traceId) {
+      const pathname = `/project/${projectId}/traces/${encodeURIComponent(traceId)}?observation=${encodeURIComponent(id)}`;
+      const pathnameWithBasePath = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}${pathname}`;
+      window.open(pathnameWithBasePath, "_blank", "noopener noreferrer");
+    }
   };
 
   if (!row) return <Skeleton className="min-h-full w-full" />;
@@ -178,7 +168,6 @@ export const PeekDatasetCompareDetail = ({
                         value={run}
                         projectId={projectId}
                         scoreKeyToDisplayName={scoreKeyToDisplayName}
-                        selectedMetrics={selectedMetrics}
                         output={row.expectedOutput}
                         isHighlighted={id === runId}
                         actionButtons={
@@ -187,15 +176,17 @@ export const PeekDatasetCompareDetail = ({
                               variant="outline"
                               size="icon"
                               title="View full trace"
-                              onClick={() =>
+                              onClick={() => {
+                                const pathname = run?.observationId
+                                  ? `/project/${projectId}/traces/${encodeURIComponent(run.traceId)}?observation=${encodeURIComponent(run.observationId)}`
+                                  : `/project/${projectId}/traces/${encodeURIComponent(run.traceId)}`;
+                                const pathnameWithBasePath = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}${pathname}`;
                                 window.open(
-                                  run?.observationId
-                                    ? `/project/${projectId}/traces/${encodeURIComponent(run.traceId)}?observation=${encodeURIComponent(run.observationId)}`
-                                    : `/project/${projectId}/traces/${encodeURIComponent(run.traceId)}`,
+                                  pathnameWithBasePath,
                                   "_blank",
                                   "noopener noreferrer",
-                                )
-                              }
+                                );
+                              }}
                             >
                               <ListTree className="h-4 w-4" />
                             </Button>

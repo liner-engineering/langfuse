@@ -5,16 +5,15 @@ import { Button } from "@/src/components/ui/button";
 import { IOTableCell } from "@/src/components/ui/CodeJsonViewer";
 import {
   Dialog,
+  DialogBody,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/src/components/ui/dialog";
 import { DialogTrigger } from "@/src/components/ui/dialog";
 import { DialogContent } from "@/src/components/ui/dialog";
-import {
-  type DatasetRunMetric,
-  type RunMetrics,
-} from "@/src/features/datasets/components/DatasetCompareRunsTable";
+import { type RunMetrics } from "@/src/features/datasets/components/DatasetCompareRunsTable";
+import { useDatasetCompareMetrics } from "@/src/features/datasets/contexts/DatasetCompareMetricsContext";
 import { api } from "@/src/utils/api";
 import { formatIntervalSeconds } from "@/src/utils/dates";
 import { cn } from "@/src/utils/tailwind";
@@ -35,19 +34,18 @@ const DatasetAggregateCell = ({
   projectId,
   observationId,
   scoreKeyToDisplayName,
-  selectedMetrics,
   actionButtons,
   output,
   isHighlighted = false,
 }: RunMetrics & {
   projectId: string;
   scoreKeyToDisplayName: Map<string, string>;
-  selectedMetrics: DatasetRunMetric[];
   actionButtons?: ReactNode;
   output?: Prisma.JsonValue;
   isHighlighted?: boolean;
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const { selectedMetrics } = useDatasetCompareMetrics();
   // conditionally fetch the trace or observation depending on the presence of observationId
   const trace = api.traces.byId.useQuery(
     { traceId, projectId },
@@ -188,33 +186,34 @@ const DatasetAggregateCell = ({
               </DialogTrigger>
 
               <DialogContent
-                className="max-w-screen-xl"
+                size="xl"
                 onClick={(event) => event.stopPropagation()}
               >
                 <DialogHeader>
                   <DialogTitle>Expected Output → Actual Output</DialogTitle>
                 </DialogHeader>
-
-                <div className="max-h-[80vh] max-w-screen-xl space-y-6 overflow-y-auto">
-                  <div className="space-y-6">
-                    <div className="space-y-4">
-                      <div>
-                        <DiffViewer
-                          oldString={JSON.stringify(output, null, 2)}
-                          newString={JSON.stringify(
-                            data?.output ?? "null",
-                            null,
-                            2,
-                          )}
-                          oldLabel="Expected Output"
-                          newLabel="Actual Output"
-                        />
+                <DialogBody>
+                  <div className="max-h-[80vh] max-w-screen-xl space-y-6 overflow-y-auto">
+                    <div className="space-y-6">
+                      <div className="space-y-4">
+                        <div>
+                          <DiffViewer
+                            oldString={JSON.stringify(output, null, 2)}
+                            newString={JSON.stringify(
+                              data?.output ?? "null",
+                              null,
+                              2,
+                            )}
+                            oldLabel="Expected Output"
+                            newLabel="Actual Output"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                </DialogBody>
 
-                <DialogFooter className="flex flex-row">
+                <DialogFooter>
                   <Button
                     onClick={() => {
                       setIsOpen(false);
@@ -237,7 +236,6 @@ export const DatasetAggregateTableCell = ({
   value,
   projectId,
   scoreKeyToDisplayName,
-  selectedMetrics,
   actionButtons,
   output,
   isHighlighted = false,
@@ -245,7 +243,6 @@ export const DatasetAggregateTableCell = ({
   value: RunMetrics;
   projectId: string;
   scoreKeyToDisplayName: Map<string, string>;
-  selectedMetrics: DatasetRunMetric[];
   actionButtons?: ReactNode;
   output?: Prisma.JsonValue;
   isHighlighted?: boolean;
@@ -255,7 +252,6 @@ export const DatasetAggregateTableCell = ({
       projectId={projectId}
       {...value}
       scoreKeyToDisplayName={scoreKeyToDisplayName}
-      selectedMetrics={selectedMetrics}
       actionButtons={actionButtons}
       output={output}
       isHighlighted={isHighlighted}
