@@ -247,7 +247,7 @@ const EnvSchema = z.object({
     .positive()
     .default(2),
 
-  GCP_PROJECT_ID: z.string().default("liner-219011")
+  GCP_PROJECT_ID: z.string().default("liner-219011"),
 });
 
 export const env: z.infer<typeof EnvSchema> =

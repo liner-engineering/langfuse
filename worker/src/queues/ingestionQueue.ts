@@ -22,7 +22,7 @@ import { ClickhouseWriter, TableName } from "../services/ClickhouseWriter";
 import { chunk } from "lodash";
 import { randomUUID } from "crypto";
 
-import { Buffer } from 'buffer';
+import { Buffer } from "buffer";
 import { PubSubPublisher } from "../services/PubSubPublisher";
 
 const prodPubSubTopicName = "langfuse-events";
@@ -236,19 +236,30 @@ export const ingestionQueueProcessorBuilder = (
         const publishPromises = events.map(async (event) => {
           const data = Buffer.from(JSON.stringify(event));
           try {
-            if (job.data.payload.authCheck.scope.projectId == prodLangfuseProjectId) {
+            if (
+              job.data.payload.authCheck.scope.projectId ==
+              prodLangfuseProjectId
+            ) {
               const messageId = await pubSubPublisherProd.publish(data);
-              logger.debug(`Message ${messageId} published to topic ${prodPubSubTopicName}`);
-            } else if (job.data.payload.authCheck.scope.projectId == devLangfuseProjectId) {
+              logger.debug(
+                `Message ${messageId} published to topic ${prodPubSubTopicName}`,
+              );
+            } else if (
+              job.data.payload.authCheck.scope.projectId == devLangfuseProjectId
+            ) {
               const messageId = await pubSubPublisherDev.publish(data);
-              logger.debug(`Message ${messageId} published to topic ${devPubSubTopicName}`);
-            } else {  
-              logger.warn(`Project ${job.data.payload.authCheck.scope.projectId} not in target list, skipping publish`);
+              logger.debug(
+                `Message ${messageId} published to topic ${devPubSubTopicName}`,
+              );
+            } else {
+              logger.warn(
+                `Project ${job.data.payload.authCheck.scope.projectId} not in target list, skipping publish`,
+              );
             }
           } catch (error) {
-            logger.error('Error publishing individual message to PubSub:', {
+            logger.error("Error publishing individual message to PubSub:", {
               error: error instanceof Error ? error.message : String(error),
-              projectId: job.data.payload.authCheck.scope.projectId
+              projectId: job.data.payload.authCheck.scope.projectId,
             });
             // Don't throw to allow other messages to be processed
           }
@@ -256,7 +267,7 @@ export const ingestionQueueProcessorBuilder = (
 
         await Promise.all(publishPromises);
       } catch (error) {
-        logger.error('Error publishing to PubSub:', error);
+        logger.error("Error publishing to PubSub:", error);
         // Don't throw error to allow rest of processing to continue
       }
 
