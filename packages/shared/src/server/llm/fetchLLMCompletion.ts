@@ -19,10 +19,12 @@ import {
 } from "@langchain/core/output_parsers";
 import { IterableReadableStream } from "@langchain/core/utils/stream";
 import { ChatOpenAI, AzureChatOpenAI } from "@langchain/openai";
+import { env } from "../../env";
 import GCPServiceAccountKeySchema, {
   BedrockConfigSchema,
   BedrockCredentialSchema,
   VertexAIConfigSchema,
+  BEDROCK_USE_DEFAULT_CREDENTIALS,
 } from "../../interfaces/customLLMProviderConfigSchemas";
 import { processEventBatch } from "../ingestion/processEventBatch";
 import { logger } from "../logger";
@@ -40,6 +42,8 @@ import {
 } from "./types";
 import { CallbackHandler } from "langfuse-langchain";
 import type { BaseCallbackHandler } from "@langchain/core/callbacks/base";
+
+const isLangfuseCloud = Boolean(env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION);
 
 type ProcessTracedEvents = () => Promise<void>;
 
@@ -137,7 +141,7 @@ export async function fetchLLMCompletion(
     const handler = new CallbackHandler({
       _projectId: traceParams.projectId,
       _isLocalEventExportEnabled: true,
-      tags: traceParams.tags,
+      environment: traceParams.environment,
     });
     finalCallbacks.push(handler);
 
@@ -149,6 +153,7 @@ export async function fetchLLMCompletion(
         await processEventBatch(
           JSON.parse(JSON.stringify(events)), // stringify to emulate network event batch from network call
           traceParams.authCheck,
+          { isLangfuseInternal: true },
         );
       } catch (e) {
         logger.error("Failed to process traced events", { error: e });
@@ -158,28 +163,48 @@ export async function fetchLLMCompletion(
 
   finalCallbacks = finalCallbacks.length > 0 ? finalCallbacks : undefined;
 
+  // Helper function to safely stringify content
+  const safeStringify = (content: any): string => {
+    try {
+      return JSON.stringify(content);
+    } catch {
+      return "[Unserializable content]";
+    }
+  };
+
   let finalMessages: BaseMessage[];
   // VertexAI requires at least 1 user message
   if (modelParams.adapter === LLMAdapter.VertexAI && messages.length === 1) {
-    finalMessages = [new HumanMessage(messages[0].content)];
+    const safeContent =
+      typeof messages[0].content === "string"
+        ? messages[0].content
+        : JSON.stringify(messages[0].content);
+    finalMessages = [new HumanMessage(safeContent)];
   } else {
     finalMessages = messages.map((message) => {
+      // For arbitrary content types, convert to string safely
+      const safeContent =
+        typeof message.content === "string"
+          ? message.content
+          : safeStringify(message.content);
+
       if (message.role === ChatMessageRole.User)
-        return new HumanMessage(message.content);
+        return new HumanMessage(safeContent);
       if (
         message.role === ChatMessageRole.System ||
         message.role === ChatMessageRole.Developer
       )
-        return new SystemMessage(message.content);
+        return new SystemMessage(safeContent);
 
-      if (message.type === ChatMessageType.ToolResult)
+      if (message.type === ChatMessageType.ToolResult) {
         return new ToolMessage({
-          content: message.content,
+          content: safeContent,
           tool_call_id: message.toolCallId,
         });
+      }
 
       return new AIMessage({
-        content: message.content,
+        content: safeContent,
         tool_calls:
           message.type === ChatMessageType.AssistantToolCall
             ? (message.toolCalls as any)
@@ -243,7 +268,11 @@ export async function fetchLLMCompletion(
     });
   } else if (modelParams.adapter === LLMAdapter.Bedrock) {
     const { region } = BedrockConfigSchema.parse(config);
-    const credentials = BedrockCredentialSchema.parse(JSON.parse(apiKey));
+    // Handle both explicit credentials and default provider chain
+    const credentials =
+      apiKey === BEDROCK_USE_DEFAULT_CREDENTIALS && !isLangfuseCloud
+        ? undefined // undefined = use AWS SDK default credential provider chain
+        : BedrockCredentialSchema.parse(JSON.parse(apiKey));
 
     chatModel = new ChatBedrockConverse({
       model: modelParams.model,

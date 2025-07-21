@@ -21,7 +21,6 @@ export * from "./clickhouse/schema";
 export * from "./repositories/definitions";
 export * from "../server/ingestion/types";
 export * from "./ingestion/processEventBatch";
-export * from "../server/ingestion/types";
 export * from "../server/ingestion/validateAndInflateScore";
 export * from "./redis/redis";
 export * from "./redis/traceUpsert";
@@ -67,7 +66,6 @@ export * from "./clickhouse/measureAndReturn";
 export * from "./data-deletion/ingestionFileDeletion";
 export * from "./s3";
 
-export * from "./automations/webhooks";
-
 // test utils
 export * from "./test-utils";
+export * from "./utils/headerUtils";
