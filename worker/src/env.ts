@@ -14,6 +14,8 @@ const EnvSchema = z.object({
     .max(65536, `options.port should be >= 0 and < 65536`)
     .default(3030),
 
+  NEXTAUTH_URL: z.string().optional(),
+
   LANGFUSE_CACHE_AUTOMATIONS_ENABLED: z.enum(["true", "false"]).default("true"),
   LANGFUSE_CACHE_AUTOMATIONS_TTL_SECONDS: z.coerce.number().default(60),
   LANGFUSE_S3_BATCH_EXPORT_ENABLED: z.enum(["true", "false"]).default("false"),
@@ -84,6 +86,7 @@ const EnvSchema = z.object({
   CLICKHOUSE_CLUSTER_NAME: z.string().default("default"),
   CLICKHOUSE_DB: z.string().default("default"),
   CLICKHOUSE_PASSWORD: z.string(),
+  CLICKHOUSE_CLUSTER_ENABLED: z.enum(["true", "false"]).default("true"),
   LANGFUSE_EVAL_CREATOR_WORKER_CONCURRENCY: z.coerce
     .number()
     .positive()
@@ -94,6 +97,7 @@ const EnvSchema = z.object({
     .default(25),
   LANGFUSE_TRACE_DELETE_CONCURRENCY: z.coerce.number().positive().default(1),
   LANGFUSE_SCORE_DELETE_CONCURRENCY: z.coerce.number().positive().default(1),
+  LANGFUSE_DATASET_DELETE_CONCURRENCY: z.coerce.number().positive().default(1),
   LANGFUSE_PROJECT_DELETE_CONCURRENCY: z.coerce.number().positive().default(1),
   LANGFUSE_EVAL_EXECUTION_WORKER_CONCURRENCY: z.coerce
     .number()
@@ -128,9 +132,6 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("false"),
 
-  LANGFUSE_CACHE_MODEL_MATCH_ENABLED: z.enum(["true", "false"]).default("true"),
-  LANGFUSE_CACHE_MODEL_MATCH_TTL_SECONDS: z.coerce.number().default(30),
-
   // Flags to toggle queue consumers on or off.
   QUEUE_CONSUMER_CLOUD_USAGE_METERING_QUEUE_IS_ENABLED: z
     .enum(["true", "false"])
@@ -157,6 +158,9 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("true"),
   QUEUE_CONSUMER_SCORE_DELETE_QUEUE_IS_ENABLED: z
+    .enum(["true", "false"])
+    .default("true"),
+  QUEUE_CONSUMER_DATASET_DELETE_QUEUE_IS_ENABLED: z
     .enum(["true", "false"])
     .default("true"),
   QUEUE_CONSUMER_PROJECT_DELETE_QUEUE_IS_ENABLED: z
@@ -233,8 +237,15 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(120_000), // 2 minutes
+  LANGFUSE_CLICKHOUSE_DATASET_DELETION_CONCURRENCY_DURATION_MS: z.coerce
+    .number()
+    .positive()
+    .default(120_000), // 2 minutes
 
   LANGFUSE_EXPERIMENT_INSERT_INTO_AGGREGATING_MERGE_TREES: z
+    .enum(["true", "false"])
+    .default("false"),
+  LANGFUSE_EXPERIMENT_RETURN_NEW_RESULT: z
     .enum(["true", "false"])
     .default("false"),
 
@@ -247,6 +258,8 @@ const EnvSchema = z.object({
     .number()
     .positive()
     .default(2),
+
+  LANGFUSE_DELETE_BATCH_SIZE: z.coerce.number().positive().default(2000),
 
   GCP_PROJECT_ID: z.string().default("liner-219011"),
 });

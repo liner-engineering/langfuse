@@ -6,6 +6,7 @@ import { logger } from "../logger";
 const defaultRedisOptions: Partial<RedisOptions> = {
   maxRetriesPerRequest: null,
   enableAutoPipelining: env.REDIS_ENABLE_AUTO_PIPELINING === "true",
+  keyPrefix: env.REDIS_KEY_PREFIX ?? undefined,
 };
 
 export const redisQueueRetryOptions: Partial<RedisOptions> = {
@@ -76,6 +77,7 @@ const createRedisClusterInstance = (
       callback(null, address);
     },
     redisOptions: {
+      username: env.REDIS_USERNAME || undefined,
       password: env.REDIS_AUTH || undefined,
       ...defaultRedisOptions,
       ...additionalOptions,
@@ -128,6 +130,7 @@ export const createNewRedisInstance = (
       ? new Redis({
           host: String(env.REDIS_HOST),
           port: Number(env.REDIS_PORT),
+          username: env.REDIS_USERNAME || undefined,
           password: String(env.REDIS_AUTH),
           ...defaultRedisOptions,
           ...additionalOptions,

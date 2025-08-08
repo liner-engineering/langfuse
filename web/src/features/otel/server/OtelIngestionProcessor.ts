@@ -435,7 +435,6 @@ export class OtelIngestionProcessor {
       isLangfuseSDKSpans,
       isRootSpan,
       hasTraceUpdates,
-      parentObservationId,
       span,
     } = params;
 
@@ -446,15 +445,15 @@ export class OtelIngestionProcessor {
       environment: this.extractEnvironment(attributes, resourceAttributes),
     };
 
+    const instrumentationScopeName = scopeSpan?.scope?.name as string;
+
     // Create full trace for root spans or spans with trace updates
-    if (isRootSpan || hasTraceUpdates) {
+    if (isRootSpan) {
       trace = {
         ...trace,
         name:
           (attributes[LangfuseOtelSpanAttributes.TRACE_NAME] as string) ??
-          (!parentObservationId
-            ? this.extractName(span.name, attributes)
-            : undefined),
+          this.extractName(span.name, attributes),
         metadata: {
           ...resourceAttributeMetadata,
           ...this.extractMetadata(attributes, "trace"),
@@ -477,14 +476,49 @@ export class OtelIngestionProcessor {
           null,
         userId: this.extractUserId(attributes),
         sessionId: this.extractSessionId(attributes),
-        public:
-          attributes?.[LangfuseOtelSpanAttributes.TRACE_PUBLIC] === true ||
-          attributes?.[LangfuseOtelSpanAttributes.TRACE_PUBLIC] === "true" ||
-          attributes?.["langfuse.public"] === true ||
-          attributes?.["langfuse.public"] === "true",
+        public: this.isTracePublic(attributes),
         tags: this.extractTags(attributes),
         environment: this.extractEnvironment(attributes, resourceAttributes),
-        ...this.extractInputAndOutput(span?.events ?? [], attributes, "trace"),
+        ...this.extractInputAndOutput({
+          events: span?.events ?? [],
+          attributes,
+          domain: "trace",
+          instrumentationScopeName,
+        }),
+      };
+    }
+
+    if (hasTraceUpdates && !isRootSpan) {
+      trace = {
+        ...trace,
+        name: attributes[LangfuseOtelSpanAttributes.TRACE_NAME] as string,
+        metadata: {
+          ...resourceAttributeMetadata,
+          ...this.extractMetadata(attributes, "trace"),
+          ...(isLangfuseSDKSpans
+            ? {}
+            : { attributes: spanAttributesInMetadata }),
+          resourceAttributes,
+          scope: {
+            ...(scopeSpan.scope || {}),
+            attributes: scopeAttributes,
+          },
+        } as Record<string, string | Record<string, string | number>>,
+        version:
+          (attributes?.[LangfuseOtelSpanAttributes.VERSION] as string) ??
+          resourceAttributes?.["service.version"] ??
+          null,
+        release:
+          (attributes?.[LangfuseOtelSpanAttributes.RELEASE] as string) ??
+          resourceAttributes?.[LangfuseOtelSpanAttributes.RELEASE] ??
+          null,
+        userId: this.extractUserId(attributes),
+        sessionId: this.extractSessionId(attributes),
+        public: this.isTracePublic(attributes),
+        tags: this.extractTags(attributes),
+        environment: this.extractEnvironment(attributes, resourceAttributes),
+        input: attributes[LangfuseOtelSpanAttributes.TRACE_INPUT],
+        output: attributes[LangfuseOtelSpanAttributes.TRACE_OUTPUT],
       };
     }
 
@@ -502,6 +536,18 @@ export class OtelIngestionProcessor {
       timestamp: new Date(startTimeISO).toISOString(),
       body: trace,
     };
+  }
+
+  private isTracePublic(
+    attributes?: Record<string, unknown>,
+  ): boolean | undefined {
+    const value =
+      attributes?.[LangfuseOtelSpanAttributes.TRACE_PUBLIC] ??
+      attributes?.["langfuse.public"];
+
+    if (value == null) return;
+
+    return value === true || value === "true" ? true : false;
   }
 
   private createObservationEvent(
@@ -523,6 +569,8 @@ export class OtelIngestionProcessor {
       endTimeISO,
     } = params;
 
+    const instrumentationScopeName = scopeSpan?.scope?.name;
+
     const observation = {
       id: this.parseId(span.spanId?.data ?? span.spanId),
       traceId,
@@ -531,7 +579,10 @@ export class OtelIngestionProcessor {
       startTime: startTimeISO,
       endTime: endTimeISO,
       environment: this.extractEnvironment(attributes, resourceAttributes),
-      completionStartTime: this.extractCompletionStartTime(attributes),
+      completionStartTime: this.extractCompletionStartTime(
+        attributes,
+        startTimeISO,
+      ),
       metadata: {
         ...resourceAttributeMetadata,
         ...spanAttributeMetadata,
@@ -552,25 +603,35 @@ export class OtelIngestionProcessor {
         attributes[LangfuseOtelSpanAttributes.VERSION] ??
         resourceAttributes?.["service.version"] ??
         null,
-      modelParameters: this.extractModelParameters(attributes) as any,
+      modelParameters: this.extractModelParameters(
+        attributes,
+        instrumentationScopeName,
+      ) as any,
       model: this.extractModelName(attributes),
       promptName:
         attributes?.[LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_NAME] ??
         attributes["langfuse.prompt.name"] ??
+        this.parseLangfusePromptFromAISDK(attributes)?.name ??
         null,
       promptVersion:
         attributes?.[LangfuseOtelSpanAttributes.OBSERVATION_PROMPT_VERSION] ??
         attributes["langfuse.prompt.version"] ??
+        this.parseLangfusePromptFromAISDK(attributes)?.version ??
         null,
       usageDetails: this.extractUsageDetails(
         attributes,
         isLangfuseSDKSpans,
+        instrumentationScopeName,
       ) as any,
       costDetails: this.extractCostDetails(
         attributes,
         isLangfuseSDKSpans,
       ) as any,
-      ...this.extractInputAndOutput(span?.events ?? [], attributes),
+      ...this.extractInputAndOutput({
+        events: span?.events ?? [],
+        attributes,
+        instrumentationScopeName,
+      }),
     };
 
     const isGeneration =
@@ -626,12 +687,17 @@ export class OtelIngestionProcessor {
       LangfuseOtelSpanAttributes.TRACE_TAGS,
       LangfuseOtelSpanAttributes.TRACE_COMPAT_USER_ID,
       LangfuseOtelSpanAttributes.TRACE_COMPAT_SESSION_ID,
+      // OpenAI and Langchain integrations
       `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_user_id`,
       `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_session_id`,
       `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_tags`,
       `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_session_id`,
       `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_user_id`,
       `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_tags`,
+      // Vercel AI SDK
+      `ai.telemetry.metadata.sessionId`,
+      `ai.telemetry.metadata.userId`,
+      `ai.telemetry.metadata.tags`,
     ].some((traceAttribute) => Boolean(attributes[traceAttribute]));
 
     const attributeKeys = Object.keys(attributes);
@@ -735,11 +801,14 @@ export class OtelIngestionProcessor {
     }
   }
 
-  private extractInputAndOutput(
-    events: any[],
-    attributes: Record<string, unknown>,
-    domain?: "trace" | "observation",
-  ): { input: any; output: any } {
+  private extractInputAndOutput(params: {
+    events: any[];
+    attributes: Record<string, unknown>;
+    instrumentationScopeName: string;
+    domain?: "trace" | "observation";
+  }): { input: any; output: any } {
+    const { instrumentationScopeName, events, attributes, domain } = params;
+
     let input = null;
     let output = null;
 
@@ -754,6 +823,37 @@ export class OtelIngestionProcessor {
         : attributes[LangfuseOtelSpanAttributes.OBSERVATION_OUTPUT];
 
     if (input != null || output != null) {
+      return { input, output };
+    }
+
+    // Vercel AI SDK
+    if (instrumentationScopeName === "ai") {
+      input =
+        "ai.prompt.messages" in attributes
+          ? attributes["ai.prompt.messages"]
+          : "ai.prompt" in attributes
+            ? attributes["ai.prompt"]
+            : "ai.toolCall.args" in attributes
+              ? attributes["ai.toolCall.args"]
+              : undefined;
+
+      output =
+        "ai.response.text" in attributes
+          ? attributes["ai.response.text"]
+          : "ai.result.text" in attributes // Legacy support for ai SDK versions < 4.0.0
+            ? attributes["ai.result.text"]
+            : "ai.toolCall.result" in attributes
+              ? attributes["ai.toolCall.result"]
+              : "ai.response.object" in attributes
+                ? attributes["ai.response.object"]
+                : "ai.result.object" in attributes // Legacy support for ai SDK versions < 4.0.0
+                  ? attributes["ai.result.object"]
+                  : "ai.response.toolCalls" in attributes
+                    ? attributes["ai.response.toolCalls"]
+                    : "ai.result.toolCalls" in attributes // Legacy support for ai SDK versions < 4.0.0
+                      ? attributes["ai.result.toolCalls"]
+                      : undefined;
+
       return { input, output };
     }
 
@@ -835,8 +935,16 @@ export class OtelIngestionProcessor {
           return acc;
         }, {}) ?? {};
 
-      const { input: eventInput } = this.extractInputAndOutput([], input);
-      const { output: eventOutput } = this.extractInputAndOutput([], output);
+      const { input: eventInput } = this.extractInputAndOutput({
+        events: [],
+        attributes: input,
+        instrumentationScopeName,
+      });
+      const { output: eventOutput } = this.extractInputAndOutput({
+        events: [],
+        attributes: output,
+        instrumentationScopeName,
+      });
       return { input: eventInput || input, output: eventOutput || output };
     }
 
@@ -969,6 +1077,18 @@ export class OtelIngestionProcessor {
       }
     }
 
+    // Vercel AI SDK
+    const functionIdAttribute = "ai.telemetry.functionId";
+    const operationIdAttribute = "ai.operationId";
+
+    if (operationIdAttribute in attributes) {
+      const prefix = attributes[functionIdAttribute]
+        ? attributes[functionIdAttribute] + ":"
+        : "";
+
+      return prefix + attributes[operationIdAttribute];
+    }
+
     return spanName;
   }
 
@@ -976,7 +1096,7 @@ export class OtelIngestionProcessor {
     attributes: Record<string, unknown>,
     domain: "trace" | "observation",
   ): Record<string, unknown> {
-    let metadata: Record<string, unknown> = {};
+    let topLevelMetadata: Record<string, unknown> = {};
 
     const metadataKeyPrefix =
       domain === "observation"
@@ -989,9 +1109,12 @@ export class OtelIngestionProcessor {
     if (langfuseMetadataAttribute) {
       try {
         if (typeof langfuseMetadataAttribute === "string") {
-          metadata = JSON.parse(langfuseMetadataAttribute as string);
+          topLevelMetadata = JSON.parse(langfuseMetadataAttribute as string);
         } else if (typeof langfuseMetadataAttribute === "object") {
-          metadata = langfuseMetadataAttribute as Record<string, unknown>;
+          topLevelMetadata = langfuseMetadataAttribute as Record<
+            string,
+            unknown
+          >;
         }
       } catch (e) {
         // Continue with nested metadata extraction
@@ -1001,16 +1124,39 @@ export class OtelIngestionProcessor {
     const langfuseMetadata: Record<string, unknown> = {};
 
     for (const [key, value] of Object.entries(attributes)) {
-      for (const prefix of [metadataKeyPrefix, "langfuse.metadata"]) {
-        if (key.startsWith(`${prefix}.`)) {
+      for (const prefix of [
+        metadataKeyPrefix,
+        "langfuse.metadata",
+        "ai.telemetry.metadata",
+      ]) {
+        if (
+          key.startsWith(`${prefix}.`) &&
+          // Filter out the Vercel AI SDK trace attribute keys
+          ![
+            "ai.telemetry.metadata.userId",
+            "ai.telemetry.metadata.sessionId",
+            "ai.telemetry.metadata.tags",
+            "ai.telemetry.metadata.langfusePrompt",
+          ].includes(key)
+        ) {
           const newKey = key.replace(`${prefix}.`, "");
           langfuseMetadata[newKey] = value;
         }
       }
     }
 
+    // Vercel AI SDK
+    const tools =
+      "ai.prompt.tools" in attributes
+        ? attributes["ai.prompt.tools"]
+        : undefined;
+
+    if (tools) {
+      langfuseMetadata["tools"] = tools;
+    }
+
     return {
-      ...metadata,
+      ...topLevelMetadata,
       ...langfuseMetadata,
     };
   }
@@ -1023,6 +1169,7 @@ export class OtelIngestionProcessor {
       "user.id",
       `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_user_id`,
       `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_user_id`,
+      `ai.telemetry.metadata.userId`,
     ];
 
     for (const key of userIdKeys) {
@@ -1043,6 +1190,7 @@ export class OtelIngestionProcessor {
       "gen_ai.conversation.id",
       `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_session_id`,
       `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_session_id`,
+      `ai.telemetry.metadata.sessionId`,
     ];
 
     for (const key of userIdKeys) {
@@ -1056,6 +1204,7 @@ export class OtelIngestionProcessor {
 
   private extractModelParameters(
     attributes: Record<string, unknown>,
+    instrumentationScopeName: string,
   ): Record<string, unknown> {
     if (attributes[LangfuseOtelSpanAttributes.OBSERVATION_MODEL_PARAMETERS]) {
       try {
@@ -1067,6 +1216,48 @@ export class OtelIngestionProcessor {
           ),
         );
       } catch {}
+    }
+
+    // Vercel AI SDK
+    if (instrumentationScopeName === "ai") {
+      return {
+        maxSteps:
+          "ai.settings.maxSteps" in attributes
+            ? (attributes["ai.settings.maxSteps"]?.toString() ?? null)
+            : null,
+        toolChoice:
+          "ai.prompt.toolChoice" in attributes
+            ? (attributes["ai.prompt.toolChoice"]?.toString() ?? null)
+            : null,
+        maxTokens:
+          "gen_ai.request.max_tokens" in attributes
+            ? (attributes["gen_ai.request.max_tokens"]?.toString() ?? null)
+            : null,
+        finishReason:
+          "gen_ai.response.finish_reasons" in attributes
+            ? (attributes["gen_ai.response.finish_reasons"]?.toString() ?? null)
+            : "gen_ai.finishReason" in attributes //  Legacy support for ai SDK versions < 4.0.0
+              ? (attributes["gen_ai.finishReason"]?.toString() ?? null)
+              : null,
+        system:
+          "gen_ai.system" in attributes
+            ? (attributes["gen_ai.system"]?.toString() ?? null)
+            : "ai.model.provider" in attributes
+              ? (attributes["ai.model.provider"]?.toString() ?? null)
+              : null,
+        maxRetries:
+          "ai.settings.maxRetries" in attributes
+            ? (attributes["ai.settings.maxRetries"]?.toString() ?? null)
+            : null,
+        mode:
+          "ai.settings.mode" in attributes
+            ? (attributes["ai.settings.mode"]?.toString() ?? null)
+            : null,
+        temperature:
+          "gen_ai.request.temperature" in attributes
+            ? (attributes["gen_ai.request.temperature"]?.toString() ?? null)
+            : null,
+      };
     }
 
     if (attributes["llm.invocation_parameters"]) {
@@ -1141,6 +1332,7 @@ export class OtelIngestionProcessor {
   private extractUsageDetails(
     attributes: Record<string, unknown>,
     isLangfuseSDKSpan: boolean,
+    instrumentationScopeName: string,
   ): Record<string, unknown> {
     if (isLangfuseSDKSpan) {
       try {
@@ -1149,6 +1341,71 @@ export class OtelIngestionProcessor {
             LangfuseOtelSpanAttributes.OBSERVATION_USAGE_DETAILS
           ] as string,
         );
+      } catch {}
+    }
+
+    if (instrumentationScopeName === "ai") {
+      try {
+        const usageDetails: Record<string, number | undefined> = {
+          input:
+            "gen_ai.usage.prompt_tokens" in attributes // Backward compat, input_tokens used in latest ai SDK versions
+              ? parseInt(
+                  attributes["gen_ai.usage.prompt_tokens"]?.toString() ?? "0",
+                )
+              : "gen_ai.usage.input_tokens" in attributes
+                ? parseInt(
+                    attributes["gen_ai.usage.input_tokens"]?.toString() ?? "0",
+                  )
+                : undefined,
+
+          output:
+            "gen_ai.usage.completion_tokens" in attributes // Backward compat, output_tokens used in latest ai SDK versions
+              ? parseInt(
+                  attributes["gen_ai.usage.completion_tokens"]?.toString() ??
+                    "0",
+                )
+              : "gen_ai.usage.output_tokens" in attributes
+                ? parseInt(
+                    attributes["gen_ai.usage.output_tokens"]?.toString() ?? "0",
+                  )
+                : undefined,
+          total:
+            "ai.usage.tokens" in attributes
+              ? parseInt(attributes["ai.usage.tokens"]?.toString() ?? "0")
+              : undefined,
+        };
+
+        const providerMetadata = attributes["ai.response.providerMetadata"];
+        if (providerMetadata) {
+          const parsed = JSON.parse(providerMetadata as string);
+
+          if ("openai" in parsed) {
+            const openaiMetadata = parsed["openai"] as Record<string, number>;
+
+            usageDetails["input_cached_tokens"] =
+              openaiMetadata["cachedPromptTokens"];
+            usageDetails["accepted_prediction_tokens"] =
+              openaiMetadata["acceptedPredictionTokens"];
+            usageDetails["rejected_prediction_tokens"] =
+              openaiMetadata["rejectedPredictionTokens"];
+            usageDetails["output_reasoning_tokens"] =
+              openaiMetadata["reasoningTokens"];
+          }
+          // "ai.response.providerMetadata": "{\"anthropic\":{\"cacheCreationInputTokens\":0,\"cacheReadInputTokens\":0}}"
+          if ("anthropic" in parsed) {
+            const openaiMetadata = parsed["anthropic"] as Record<
+              string,
+              number
+            >;
+
+            usageDetails["input_cache_creation"] =
+              openaiMetadata["cacheCreationInputTokens"];
+            usageDetails["input_cache_read"] =
+              openaiMetadata["cacheReadInputTokens"];
+          }
+        }
+
+        return usageDetails;
       } catch {}
     }
 
@@ -1202,13 +1459,30 @@ export class OtelIngestionProcessor {
     return {};
   }
 
-  private extractCompletionStartTime(attributes: Record<string, unknown>) {
+  private extractCompletionStartTime(
+    attributes: Record<string, unknown>,
+    startTimeISO?: string,
+  ): string | null {
     try {
       return JSON.parse(
         attributes[
           LangfuseOtelSpanAttributes.OBSERVATION_COMPLETION_START_TIME
         ] as string,
       );
+    } catch {}
+
+    // Vercel AI SDK
+    try {
+      const msToFirstChunk =
+        attributes["ai.response.msToFirstChunk"] ??
+        attributes["ai.stream.msToFirstChunk"];
+      if (msToFirstChunk && startTimeISO) {
+        const msToFirstChunkNumber = Math.ceil(Number(msToFirstChunk));
+
+        const startTimeUnix = new Date(startTimeISO).getTime();
+
+        return new Date(startTimeUnix + msToFirstChunkNumber).toISOString();
+      }
     } catch {}
 
     return null;
@@ -1221,7 +1495,10 @@ export class OtelIngestionProcessor {
       attributes[
         `${LangfuseOtelSpanAttributes.OBSERVATION_METADATA}.langfuse_tags`
       ] ||
-      attributes[`${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_tags`];
+      attributes[
+        `${LangfuseOtelSpanAttributes.TRACE_METADATA}.langfuse_tags`
+      ] ||
+      attributes["ai.telemetry.metadata.tags"];
 
     if (tagsValue === undefined || tagsValue === null) {
       return [];
@@ -1253,6 +1530,19 @@ export class OtelIngestionProcessor {
     return [];
   }
 
+  private parseLangfusePromptFromAISDK(
+    attributes: Record<string, unknown>,
+  ): { name: string; version: number } | undefined {
+    const aiSDKPrompt = attributes["ai.telemetry.metadata.langfusePrompt"];
+
+    if (!aiSDKPrompt) return;
+
+    try {
+      const parsed = JSON.parse(aiSDKPrompt as string);
+
+      return typeof parsed === "object" ? parsed : undefined;
+    } catch {}
+  }
   /**
    * Get a set of trace IDs that have been seen recently (from Redis cache).
    * Returns a Set of trace IDs that should not trigger new trace creation.

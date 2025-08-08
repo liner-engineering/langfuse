@@ -41,6 +41,8 @@ import { TableViewPresetsRouter } from "@/src/server/api/routers/tableViewPreset
 import { automationsRouter } from "@/src/features/automations/server/router";
 import { defaultEvalModelRouter } from "@/src/features/evals/server/defaultEvalModelRouter";
 import { plainRouter } from "@/src/features/support-chat/trpc/plain";
+import { slackRouter } from "@/src/features/slack/server/router";
+import { queueAssignmentRouter } from "@/src/features/annotation-queues/server/annotationQueueAssignments";
 
 /**
  * This is the primary router for your server.
@@ -50,6 +52,7 @@ import { plainRouter } from "@/src/features/support-chat/trpc/plain";
 export const appRouter = createTRPCRouter({
   annotationQueues: queueRouter,
   annotationQueueItems: queueItemRouter,
+  annotationQueueAssignments: queueAssignmentRouter,
   batchExport: batchExportRouter,
   traces: traceRouter,
   sessions: sessionRouter,
@@ -89,6 +92,7 @@ export const appRouter = createTRPCRouter({
   dashboardWidgets: dashboardWidgetRouter,
   TableViewPresets: TableViewPresetsRouter,
   automations: automationsRouter,
+  slack: slackRouter,
   plain: plainRouter,
 });
 

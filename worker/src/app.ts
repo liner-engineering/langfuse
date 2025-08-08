@@ -33,6 +33,8 @@ import {
 import { env } from "./env";
 import { ingestionQueueProcessorBuilder } from "./queues/ingestionQueue";
 import { BackgroundMigrationManager } from "./backgroundMigrations/backgroundMigrationManager";
+import { prisma } from "@langfuse/shared/src/db";
+import { ClickhouseReadSkipCache } from "./utils/clickhouseReadSkipCache";
 import { experimentCreateQueueProcessor } from "./queues/experimentQueue";
 import { traceDeleteProcessor } from "./queues/traceDelete";
 import { projectDeleteProcessor } from "./queues/projectDelete";
@@ -55,6 +57,7 @@ import { scoreDeleteProcessor } from "./queues/scoreDelete";
 import { DlqRetryService } from "./services/dlq/dlqRetryService";
 import { entityChangeQueueProcessor } from "./queues/entityChangeQueue";
 import { webhookProcessor } from "./queues/webhooks";
+import { datasetDeleteProcessor } from "./queues/datasetDelete";
 
 const app = express();
 
@@ -78,6 +81,13 @@ if (env.LANGFUSE_ENABLE_BACKGROUND_MIGRATIONS === "true") {
     logger.error("Error running background migrations", err);
   });
 }
+
+// Initialize ClickhouseReadSkipCache on container start
+ClickhouseReadSkipCache.getInstance(prisma)
+  .initialize()
+  .catch((err) => {
+    logger.error("Error initializing ClickhouseReadSkipCache", err);
+  });
 
 if (env.QUEUE_CONSUMER_TRACE_UPSERT_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(
@@ -146,6 +156,17 @@ if (env.QUEUE_CONSUMER_SCORE_DELETE_QUEUE_IS_ENABLED === "true") {
   });
 }
 
+if (env.QUEUE_CONSUMER_DATASET_DELETE_QUEUE_IS_ENABLED === "true") {
+  WorkerManager.register(QueueName.DatasetDelete, datasetDeleteProcessor, {
+    concurrency: env.LANGFUSE_DATASET_DELETE_CONCURRENCY,
+    limiter: {
+      max: env.LANGFUSE_DATASET_DELETE_CONCURRENCY,
+      duration:
+        env.LANGFUSE_CLICKHOUSE_DATASET_DELETION_CONCURRENCY_DURATION_MS,
+    },
+  });
+}
+
 if (env.QUEUE_CONSUMER_PROJECT_DELETE_QUEUE_IS_ENABLED === "true") {
   WorkerManager.register(QueueName.ProjectDelete, projectDeleteProcessor, {
     concurrency: env.LANGFUSE_PROJECT_DELETE_CONCURRENCY,
@@ -174,6 +195,13 @@ if (env.QUEUE_CONSUMER_EVAL_EXECUTION_QUEUE_IS_ENABLED === "true") {
     evalJobExecutorQueueProcessor,
     {
       concurrency: env.LANGFUSE_EVAL_EXECUTION_WORKER_CONCURRENCY,
+      // The default lockDuration is 30s and the lockRenewTime 1/2 of that.
+      // We set it to 60s to reduce the number of lock renewals and also be less sensitive to high CPU wait times.
+      // We also update the stalledInterval check to 120s from 30s default to perform the check less frequently.
+      // Finally, we set the maxStalledCount to 3 (default 1) to perform repeated attempts on stalled jobs.
+      lockDuration: 60000, // 60 seconds
+      stalledInterval: 120000, // 120 seconds
+      maxStalledCount: 3,
     },
   );
 }
