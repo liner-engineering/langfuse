@@ -1,3 +1,29 @@
+# Version Up
+
+1. `git fetch --all --tags`
+2. `git merge --no-ff {verison tag}` (e.g `git merge --no-ff v3.95.2`)
+3. confilct 발생 시 resolve
+4. worker docker build
+```
+docker buildx build --platform linux/amd64 --push -t us-docker.pkg.dev/liner-219011/langfuse/worker:3.95.2 -f ./worker/Dockerfile .
+```
+5. agent-helm-charts repo에서 helm chart tag 수정
+```
+langfuse:
+  worker:
+    image:
+      repository: us-docker.pkg.dev/liner-219011/langfuse/worker
+      tag: 3.95.2 <-- 이 부분 수정
+```
+6. helm upgrade
+```
+ helm upgrade langfuse . -f values.yaml --namespace langfuse-v3
+```
+7. 변경사항 git push
+
+---
+
+
 ![Langfuse GitHub Banner](https://langfuse.com/images/docs/github-readme/github-banner.png)
 
 <div align="center">
