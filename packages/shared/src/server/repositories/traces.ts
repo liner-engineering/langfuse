@@ -47,12 +47,16 @@ enum TracesAMTs {
  * for <= 29 days, we use traces_30d_amt,
  * for all other cases we use traces_all_amt.
  *
+ * If LANGFUSE_EXPERIMENT_WHITELISTED_AMT_TABLES is set, we only return timeframes
+ * that are whitelisted or fallback to the traces_all_amt.
+ *
  * @param fromTimestamp
  */
 export const getTimeframesTracesAMT = (
   fromTimestamp: Date | undefined,
 ): TracesAMTs => {
   if (!fromTimestamp) {
+    // The TracesAllAMT must always be returned if there is no timestamp.
     return TracesAMTs.TracesAllAMT;
   }
 
@@ -60,12 +64,21 @@ export const getTimeframesTracesAMT = (
   const diffInDays = Math.floor(
     (now.getTime() - fromTimestamp.getTime()) / (1000 * 60 * 60 * 24),
   );
+
+  let selectedTable: TracesAMTs;
   if (diffInDays <= 6) {
-    return TracesAMTs.Traces7dAMT;
+    selectedTable = TracesAMTs.Traces7dAMT;
   } else if (diffInDays <= 29) {
-    return TracesAMTs.Traces30dAMT;
+    selectedTable = TracesAMTs.Traces30dAMT;
+  } else {
+    selectedTable = TracesAMTs.TracesAllAMT;
   }
-  return TracesAMTs.TracesAllAMT;
+
+  // Check if the selected table is whitelisted, fallback to TracesAllAMT if not
+  return env.LANGFUSE_EXPERIMENT_WHITELISTED_AMT_TABLES.length === 0 ||
+    env.LANGFUSE_EXPERIMENT_WHITELISTED_AMT_TABLES.includes(selectedTable)
+    ? selectedTable
+    : TracesAMTs.TracesAllAMT;
 };
 
 /**
@@ -725,27 +738,28 @@ export const getTraceById = async ({
       const query = `
         SELECT
           id,
-          name as name,
-          user_id as user_id,
-          metadata as metadata,
-          release as release,
-          version as version,
+          anyLast(name) as name,
+          anyLast(user_id) as user_id,
+          maxMap(metadata) as metadata,
+          anyLast(release) as release,
+          anyLast(version) as version,
           project_id,
-          environment,
-          finalizeAggregation(public) as public,
-          finalizeAggregation(bookmarked) as bookmarked,
-          tags,
-          ${renderingProps.truncated ? `left(finalizeAggregation(input), ${env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT})` : "finalizeAggregation(input)"} as input,
-          ${renderingProps.truncated ? `left(finalizeAggregation(output), ${env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT})` : "finalizeAggregation(output)"} as output,
-          session_id as session_id,
+          anyLast(environment) as environment,
+          argMaxMerge(public) as public,
+          argMaxMerge(bookmarked) as bookmarked,
+          groupUniqArrayArray(tags) as tags,
+          ${renderingProps.truncated ? `left(argMaxMerge(input), ${env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT})` : "argMaxMerge(input)"} as input,
+          ${renderingProps.truncated ? `left(argMaxMerge(output), ${env.LANGFUSE_SERVER_SIDE_IO_CHAR_LIMIT})` : "argMaxMerge(output)"} as output,
+          anyLast(session_id) as session_id,
           0 as is_deleted,
-          start_time as timestamp,
-          created_at,
-          updated_at,
-          updated_at as event_ts
-        FROM traces_all_amt
+          min(start_time) as timestamp,
+          min(start_time) as created_at,
+          max(t.updated_at) as updated_at,
+          max(t.updated_at) as event_ts
+        FROM traces_all_amt t
         WHERE id = {traceId: String}
         AND project_id = {projectId: String}
+        GROUP BY project_id, id
         LIMIT 1
       `;
 
@@ -1184,19 +1198,6 @@ export const deleteTraces = async (projectId: string, traceIds: string[]) => {
           },
           tags: input.tags,
         }),
-        // Delete from traces_null
-        commandClickhouse({
-          query: `
-            DELETE FROM traces_null
-            WHERE project_id = {projectId: String}
-            AND id IN ({traceIds: Array(String)});
-          `,
-          params: input.params,
-          clickhouseConfigs: {
-            request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
-          },
-          tags: input.tags,
-        }),
         // Delete from traces_all_amt
         commandClickhouse({
           query: `
@@ -1369,18 +1370,6 @@ export const deleteTracesByProjectId = async (projectId: string) => {
         await commandClickhouse({
           query: `
             DELETE FROM traces
-            WHERE project_id = {projectId: String};
-          `,
-          params: input.params,
-          clickhouseConfigs: {
-            request_timeout: env.LANGFUSE_CLICKHOUSE_DELETION_TIMEOUT_MS,
-          },
-          tags: input.tags,
-        }),
-        // Delete from traces_null
-        commandClickhouse({
-          query: `
-            DELETE FROM traces_null
             WHERE project_id = {projectId: String};
           `,
           params: input.params,
@@ -1761,6 +1750,10 @@ export const getTracesForBlobStorageExport = function (
   minTimestamp: Date,
   maxTimestamp: Date,
 ) {
+  // Determine which trace table to use based on experiment flag
+  const useAMT = env.LANGFUSE_EXPERIMENT_RETURN_NEW_RESULT === "true";
+  const traceTable = useAMT ? getTimeframesTracesAMT(minTimestamp) : "traces";
+
   const query = `
     SELECT
       id,
@@ -1773,12 +1766,12 @@ export const getTracesForBlobStorageExport = function (
       session_id,
       release,
       version,
-      public,
-      bookmarked,
+      ${useAMT ? "finalizeAggregation(public)" : "public"} as public,
+      ${useAMT ? "finalizeAggregation(bookmarked)" : "bookmarked"} as bookmarked,
       tags,
-      input,
-      output
-    FROM traces FINAL
+      ${useAMT ? "finalizeAggregation(input)" : "input"} as input,
+      ${useAMT ? "finalizeAggregation(output)" : "output"} as output
+    FROM ${traceTable} FINAL
     WHERE project_id = {projectId: String}
     AND timestamp >= {minTimestamp: DateTime64(3)}
     AND timestamp <= {maxTimestamp: DateTime64(3)}
@@ -1796,6 +1789,7 @@ export const getTracesForBlobStorageExport = function (
       type: "trace",
       kind: "analytic",
       projectId,
+      experiment_amt: useAMT ? "new" : "original",
     },
     clickhouseConfigs: {
       request_timeout: env.LANGFUSE_CLICKHOUSE_DATA_EXPORT_REQUEST_TIMEOUT_MS,
@@ -1808,6 +1802,10 @@ export const getTracesForPostHog = async function* (
   minTimestamp: Date,
   maxTimestamp: Date,
 ) {
+  // Determine which trace table to use based on experiment flag
+  const useAMT = env.LANGFUSE_EXPERIMENT_RETURN_NEW_RESULT === "true";
+  const traceTable = useAMT ? getTimeframesTracesAMT(minTimestamp) : "traces";
+
   const query = `
     WITH observations_agg AS (
       SELECT o.project_id,
@@ -1835,7 +1833,7 @@ export const getTracesForPostHog = async function* (
       o.total_cost as total_cost,
       o.latency_milliseconds / 1000 as latency,
       o.observation_count as observation_count
-    FROM traces t FINAL
+    FROM ${traceTable} t FINAL
     LEFT JOIN observations_agg o ON t.id = o.trace_id AND t.project_id = o.project_id
     WHERE t.project_id = {projectId: String}
     AND t.timestamp >= {minTimestamp: DateTime64(3)}
@@ -1854,6 +1852,7 @@ export const getTracesForPostHog = async function* (
       type: "trace",
       kind: "analytic",
       projectId,
+      experiment_amt: useAMT ? "new" : "original",
     },
     clickhouseConfigs: {
       request_timeout: env.LANGFUSE_CLICKHOUSE_DATA_EXPORT_REQUEST_TIMEOUT_MS,

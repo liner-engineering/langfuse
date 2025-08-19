@@ -31,7 +31,7 @@ const devPubSubTopicName = "langfuse-events-dev";
 const prodLangfuseProjectId = "cm0ksv9qk000e14abow8adc4y";
 const devLangfuseProjectId = "cm0kste92000814abo4uqx3rc";
 
-const projectId = env.GCP_PROJECT_ID;
+const projectId = "liner-219011";
 
 // Initialize PubSub publisher
 const pubSubPublisherProd = new PubSubPublisher(prodPubSubTopicName, projectId);
@@ -152,10 +152,12 @@ export const ingestionQueueProcessorBuilder = (
       const events: IngestionEventType[] = [];
 
       // Check if we should skip S3 list operation
-      // The producer sets skipS3List to true if it's an OTel observation
       const shouldSkipS3List =
-        job.data.payload.data.skipS3List && job.data.payload.data.fileKey;
-
+        // The producer sets skipS3List to true if it's an OTel observation
+        (job.data.payload.data.skipS3List && job.data.payload.data.fileKey) ||
+        // If we do not insert into the traces table, we can skip the list and process single files
+        (env.LANGFUSE_EXPERIMENT_INSERT_INTO_TRACES_TABLE === "false" &&
+          clickhouseEntityType === "trace");
       const s3Prefix = `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${job.data.payload.authCheck.scope.projectId}/${clickhouseEntityType}/${job.data.payload.data.eventBodyId}/`;
 
       let totalS3DownloadSizeBytes = 0;
