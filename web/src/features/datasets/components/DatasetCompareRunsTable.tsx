@@ -12,7 +12,6 @@ import { NumberParam } from "use-query-params";
 import { useQueryParams, withDefault } from "use-query-params";
 import { useMemo, useState, useCallback, useEffect } from "react";
 import { usdFormatter } from "@/src/utils/numbers";
-import { getScoreDataTypeIcon } from "@/src/features/scores/components/ScoreDetailColumnHelpers";
 import { api, type RouterOutputs } from "@/src/utils/api";
 import { Button } from "@/src/components/ui/button";
 import { Cog } from "lucide-react";
@@ -34,6 +33,10 @@ import {
   DatasetCompareMetricsProvider,
   useDatasetCompareMetrics,
 } from "@/src/features/datasets/contexts/DatasetCompareMetricsContext";
+import {
+  getScoreDataTypeIcon,
+  scoreFilters,
+} from "@/src/features/scores/lib/scoreColumns";
 
 export type RunMetrics = {
   id: string;
@@ -153,16 +156,12 @@ function DatasetCompareRunsTableInternal(props: {
         queryKey: getQueryKey(api.datasets.runitemsByRunIdOrItemId, {
           projectId: props.projectId,
           datasetRunId: runId,
-          page: paginationState.pageIndex,
-          limit: paginationState.pageSize,
+          datasetItemIds: baseDatasetItems.data?.datasetItems.map(
+            (item) => item.id,
+          ),
         }),
       })),
-    [
-      props.runIds,
-      props.projectId,
-      paginationState.pageIndex,
-      paginationState.pageSize,
-    ],
+    [props.runIds, props.projectId, baseDatasetItems.data],
   );
 
   // 2. Track changes using onSuccess callback in the queries instead of useEffect
@@ -183,24 +182,32 @@ function DatasetCompareRunsTableInternal(props: {
           )
         ) {
           const newCount = prevCount + 1;
-          return { ...prev, [runId]: newCount };
+          // Only update if the count actually changed
+          if (prev[runId] !== newCount) {
+            return { ...prev, [runId]: newCount };
+          }
+          return prev;
         }
 
-        return { ...prev, [runId]: 0 };
+        // Only reset to 0 if it wasn't already 0
+        if (prev[runId] !== 0) {
+          return { ...prev, [runId]: 0 };
+        }
+        return prev;
       });
     },
     [queryClient, runQueries],
   );
 
   // 3. Use the queries with success callback
-  const runs = runQueries.map(({ runId }) => ({
-    runId,
-    items: api.datasets.runitemsByRunIdOrItemId.useQuery(
+  const runs = runQueries.map(({ runId }) => {
+    const query = api.datasets.runitemsByRunIdOrItemId.useQuery(
       {
         projectId: props.projectId,
         datasetRunId: runId,
-        page: paginationState.pageIndex,
-        limit: paginationState.pageSize,
+        datasetItemIds: baseDatasetItems.data?.datasetItems.map(
+          (item) => item.id,
+        ),
       },
       {
         refetchOnWindowFocus: false,
@@ -213,10 +220,30 @@ function DatasetCompareRunsTableInternal(props: {
           props.localExperiments,
           unchangedCounts,
         ),
-        onSuccess: (data) => handleQuerySuccess(runId, data),
       },
-    ),
-  }));
+    );
+
+    return { runId, items: query };
+  });
+
+  // Create stable dependency for useEffect
+  const runStatesKey = useMemo(
+    () =>
+      runs
+        .map((r) => `${r.runId}-${r.items.isSuccess}-${r.items.dataUpdatedAt}`)
+        .join("|"),
+    [runs],
+  );
+
+  // Handle success callbacks for all queries - replaces `onSuccess`
+  useEffect(() => {
+    runs.forEach(({ runId, items }) => {
+      if (items.isSuccess && items.data) {
+        handleQuerySuccess(runId, items.data);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runStatesKey, handleQuerySuccess]);
 
   const combinedData = useMemo(() => {
     if (!baseDatasetItems.data) return null;
@@ -263,26 +290,23 @@ function DatasetCompareRunsTableInternal(props: {
     );
   }, [baseDatasetItems.data, runs]);
 
-  const scoreKeysAndProps = api.scores.getScoreKeysAndProps.useQuery(
-    {
-      projectId: props.projectId,
-      selectedTimeOption: { filterSource: "TABLE", option: "All time" },
-    },
-    {
-      refetchOnWindowFocus: false,
-      refetchOnMount: false,
-      refetchOnReconnect: false,
-      staleTime: Infinity,
-    },
-  );
+  const scoreKeysAndProps = api.scores.getScoreColumns.useQuery({
+    projectId: props.projectId,
+    filter: scoreFilters.forDatasetRunItems({
+      datasetRunIds: props.runIds,
+      datasetId: props.datasetId,
+    }),
+  });
 
   const scoreKeyToDisplayName = useMemo(() => {
     if (!scoreKeysAndProps.data) return new Map<string, string>();
     return new Map(
-      scoreKeysAndProps.data.map(({ key, dataType, source, name }) => [
-        key,
-        `${getScoreDataTypeIcon(dataType)} ${name} (${source.toLowerCase()})`,
-      ]),
+      scoreKeysAndProps.data.scoreColumns.map(
+        ({ key, dataType, source, name }) => [
+          key,
+          `${getScoreDataTypeIcon(dataType)} ${name} (${source.toLowerCase()})`,
+        ],
+      ),
     );
   }, [scoreKeysAndProps.data]);
 
@@ -424,7 +448,7 @@ function DatasetCompareRunsTableInternal(props: {
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={setColumnVisibility}
         data={
-          baseDatasetItems.isLoading
+          baseDatasetItems.isPending
             ? { isLoading: true, isError: false }
             : baseDatasetItems.isError
               ? {
