@@ -16,10 +16,30 @@ import { hasOrganizationAccess } from "@/src/features/rbac/utils/checkOrganizati
 import { SidebarInset, SidebarProvider } from "@/src/components/ui/sidebar";
 import { AppSidebar } from "@/src/components/nav/app-sidebar";
 import { CommandMenu } from "@/src/features/command-k-menu/CommandMenu";
+import { SupportDrawer } from "@/src/features/support-chat/SupportDrawer";
+import { useSupportDrawer } from "@/src/features/support-chat/SupportDrawerProvider";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/src/components/ui/resizable";
+import {
+  PaymentBanner,
+  PaymentBannerProvider,
+} from "@/src/features/payment-banner";
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/src/components/ui/drawer";
+import { useMediaQuery } from "react-responsive";
 import {
   processNavigation,
   type NavigationItem,
 } from "@/src/components/layouts/utilities/routes";
+import { useLangfuseCloudRegion } from "@/src/features/organizations/hooks";
 
 const signOutUser = async () => {
   sessionStorage.clear();
@@ -29,6 +49,10 @@ const signOutUser = async () => {
 
 const getUserNavigation = () => {
   return [
+    {
+      name: "Account Settings",
+      href: "/account/settings",
+    },
     {
       name: "Theme",
       onClick: () => {},
@@ -104,6 +128,7 @@ export default function Layout(props: PropsWithChildren) {
     | string
     | undefined;
   const session = useSessionWithRetryOnUnauthenticated();
+  const { isLangfuseCloud, region } = useLangfuseCloudRegion();
 
   const enableExperimentalFeatures =
     session.data?.environment.enableExperimentalFeatures ?? false;
@@ -112,9 +137,7 @@ export default function Layout(props: PropsWithChildren) {
 
   const uiCustomization = useUiCustomization();
 
-  const cloudAdmin =
-    env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION !== undefined &&
-    session.data?.user?.admin === true;
+  const cloudAdmin = isLangfuseCloud && session.data?.user?.admin === true;
 
   // project info based on projectId in the URL
   const { project, organization } = useQueryProjectOrOrganization();
@@ -304,36 +327,101 @@ export default function Layout(props: PropsWithChildren) {
           rel="icon"
           type="image/png"
           sizes="32x32"
-          href={`${env.NEXT_PUBLIC_BASE_PATH ?? ""}/favicon-32x32${env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "DEV" ? "-dev" : ""}.png`}
+          href={`${env.NEXT_PUBLIC_BASE_PATH ?? ""}/favicon-32x32${region === "DEV" ? "-dev" : ""}.png`}
         />
         <link
           rel="icon"
           type="image/png"
           sizes="16x16"
-          href={`${env.NEXT_PUBLIC_BASE_PATH ?? ""}/favicon-16x16${env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION === "DEV" ? "-dev" : ""}.png`}
+          href={`${env.NEXT_PUBLIC_BASE_PATH ?? ""}/favicon-16x16${region === "DEV" ? "-dev" : ""}.png`}
         />
       </Head>
-      <div>
+      <PaymentBannerProvider>
         <SidebarProvider>
-          <AppSidebar
-            navItems={mainNavigation}
-            secondaryNavItems={secondaryNavigation}
-            userNavProps={{
-              items: getUserNavigation(),
-              user: {
-                name: session.data?.user?.name ?? "",
-                email: session.data?.user?.email ?? "",
-                avatar: session.data?.user?.image ?? "",
-              },
-            }}
-          />
-          <SidebarInset className="h-dvh max-w-full md:peer-data-[state=collapsed]:w-[calc(100vw-var(--sidebar-width-icon))] md:peer-data-[state=expanded]:w-[calc(100vw-var(--sidebar-width))]">
-            <main className="h-full">{props.children}</main>
-            <Toaster visibleToasts={1} />
-            <CommandMenu mainNavigation={navigation} />
-          </SidebarInset>
+          <div className="flex h-dvh w-full flex-col">
+            <PaymentBanner />
+            <div className="flex min-h-0 flex-1 pt-banner-offset">
+              <AppSidebar
+                navItems={mainNavigation}
+                secondaryNavItems={secondaryNavigation}
+                userNavProps={{
+                  items: getUserNavigation(),
+                  user: {
+                    name: session.data?.user?.name ?? "",
+                    email: session.data?.user?.email ?? "",
+                    avatar: session.data?.user?.image ?? "",
+                  },
+                }}
+              />
+              <SidebarInset className="h-screen-with-banner max-w-full md:peer-data-[state=collapsed]:w-[calc(100vw-var(--sidebar-width-icon))] md:peer-data-[state=expanded]:w-[calc(100vw-var(--sidebar-width))]">
+                <ResizableContent>{props.children}</ResizableContent>
+                <Toaster visibleToasts={1} />
+                <CommandMenu mainNavigation={navigation} />
+              </SidebarInset>
+            </div>
+          </div>
         </SidebarProvider>
-      </div>
+      </PaymentBannerProvider>
     </>
+  );
+}
+
+/** Resizable content for support drawer on the right side of the screen (desktop).
+ *  On mobile, renders a Drawer instead of a resizable sidebar.
+ */
+export function ResizableContent({ children }: PropsWithChildren) {
+  const { open, setOpen } = useSupportDrawer();
+  const isDesktop = useMediaQuery({ query: "(min-width: 768px)" });
+
+  if (!isDesktop) {
+    return (
+      <>
+        <main className="h-full flex-1">{children}</main>
+
+        <Drawer open={open} onOpenChange={setOpen} forceDirection="bottom">
+          <DrawerContent
+            id="support-drawer"
+            className="inset-x-0 bottom-0 top-[calc(var(--banner-offset)+10px)] min-h-screen-with-banner"
+            size="full"
+          >
+            <DrawerHeader className="absolute inset-x-0 top-0 p-0 text-left">
+              <div className="flex w-full items-center justify-center pt-3">
+                <div className="h-2 w-20 rounded-full bg-muted" />
+              </div>
+              {/* sr-only for screen readers and accessibility */}
+              <DrawerTitle className="sr-only">Support</DrawerTitle>
+              <DrawerDescription className="sr-only">
+                A list of resources and options to help you with your questions.
+              </DrawerDescription>
+            </DrawerHeader>
+            <div className="mt-4 max-h-full">
+              <SupportDrawer showCloseButton={false} className="h-full pb-20" />
+            </div>
+          </DrawerContent>
+        </Drawer>
+      </>
+    );
+  }
+
+  // 👉 DESKTOP: if drawer isn't open, render only the main content (like before)
+  if (isDesktop && !open) {
+    return <main className="h-full flex-1">{children}</main>;
+  }
+
+  const mainDefault = 70;
+  const drawerDefault = 30;
+
+  return (
+    <ResizablePanelGroup direction="horizontal" className="flex h-full w-full">
+      <ResizablePanel defaultSize={mainDefault} minSize={30}>
+        <main className="relative h-full w-full overflow-scroll">
+          {children}
+        </main>
+      </ResizablePanel>
+      <ResizableHandle withHandle />
+      <ResizablePanel defaultSize={drawerDefault} minSize={20} maxSize={60}>
+        <SupportDrawer />
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }

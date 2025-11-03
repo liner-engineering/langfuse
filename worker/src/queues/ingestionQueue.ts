@@ -158,10 +158,7 @@ export const ingestionQueueProcessorBuilder = (
       // Check if we should skip S3 list operation
       const shouldSkipS3List =
         // The producer sets skipS3List to true if it's an OTel observation
-        (job.data.payload.data.skipS3List && job.data.payload.data.fileKey) ||
-        // If we do not insert into the traces table, we can skip the list and process single files
-        (env.LANGFUSE_EXPERIMENT_INSERT_INTO_TRACES_TABLE === "false" &&
-          clickhouseEntityType === "trace");
+        job.data.payload.data.skipS3List && job.data.payload.data.fileKey;
       const s3Prefix = `${env.LANGFUSE_S3_EVENT_UPLOAD_PREFIX}${job.data.payload.authCheck.scope.projectId}/${clickhouseEntityType}/${job.data.payload.data.eventBodyId}/`;
 
       let totalS3DownloadSizeBytes = 0;
@@ -240,18 +237,28 @@ export const ingestionQueueProcessorBuilder = (
       }
 
       // Set "seen" keys in Redis to avoid reprocessing for fast updates.
+      // We use Promise.all internally instead of a redis.pipeline since autoPipelining should handle it correctly
+      // while being redis cluster aware.
       if (env.LANGFUSE_ENABLE_REDIS_SEEN_EVENT_CACHE === "true" && redis) {
-        const pipeline = redis.pipeline();
-        for (const event of eventFiles) {
-          const key = event.file.split("/").pop() ?? "";
-          pipeline.set(
-            `langfuse:ingestion:recently-processed:${job.data.payload.authCheck.scope.projectId}:${job.data.payload.data.type}:${job.data.payload.data.eventBodyId}:${key?.replace(".json", "")}`,
-            "1",
-            "EX",
-            60 * 5, // 5 minutes
+        try {
+          await Promise.all(
+            eventFiles
+              .map((e) => e.file.split("/").pop() ?? "")
+              .map((key) =>
+                redis!.set(
+                  `langfuse:ingestion:recently-processed:${job.data.payload.authCheck.scope.projectId}:${job.data.payload.data.type}:${job.data.payload.data.eventBodyId}:${key.replace(".json", "")}`,
+                  "1",
+                  "EX",
+                  60 * 5, // 5 minutes
+                ),
+              ),
+          );
+        } catch (e) {
+          logger.warn(
+            `Failed to set recently-processed cache. Continuing processing.`,
+            e,
           );
         }
-        await pipeline.exec();
       }
 
       // Perform merge of those events
@@ -304,6 +311,11 @@ export const ingestionQueueProcessorBuilder = (
         job.data.payload.data.eventBodyId,
         firstS3WriteTime,
         events,
+        // Should be true eventually, but depends on feature flag in the meantime.
+        // writeToStagingTables - enables batch propagation to events table
+        env.LANGFUSE_EXPERIMENT_INSERT_INTO_EVENTS_TABLE === "true" &&
+          env.QUEUE_CONSUMER_EVENT_PROPAGATION_QUEUE_IS_ENABLED === "true" &&
+          env.LANGFUSE_EXPERIMENT_EARLY_EXIT_EVENT_BATCH_JOB !== "true",
       );
     } catch (e) {
       logger.error(

@@ -2,6 +2,8 @@ import { Queue } from "bullmq";
 import { QueueName } from "../queues";
 import { BatchExportQueue } from "./batchExport";
 import { CloudUsageMeteringQueue } from "./cloudUsageMeteringQueue";
+import { CloudSpendAlertQueue } from "./cloudSpendAlertQueue";
+import { CloudFreeTierUsageThresholdQueue } from "./cloudFreeTierUsageThresholdQueue";
 import { DatasetRunItemUpsertQueue } from "./datasetRunItemUpsert";
 import { EvalExecutionQueue } from "./evalExecutionQueue";
 import { ExperimentCreateQueue } from "./experimentCreateQueue";
@@ -23,13 +25,16 @@ import { DeadLetterRetryQueue } from "./dlqRetryQueue";
 import { WebhookQueue } from "./webhookQueue";
 import { EntityChangeQueue } from "./entityChangeQueue";
 import { DatasetDeleteQueue } from "./datasetDelete";
+import { EventPropagationQueue } from "./eventPropagationQueue";
 
-// IngestionQueue and TraceUpsert are sharded and require a sharding key
+// IngestionQueue, OtelIngestionQueue, and TraceUpsert are sharded and require a sharding key
 // Use IngestionQueue.getInstance({ shardName: queueName }) or TraceUpsertQueue.getInstance({ shardName: queueName }) directly instead
 export function getQueue(
   queueName: Exclude<
     QueueName,
-    QueueName.IngestionQueue | QueueName.TraceUpsert
+    | QueueName.IngestionQueue
+    | QueueName.TraceUpsert
+    | QueueName.OtelIngestionQueue
   >,
 ): Queue | null {
   switch (queueName) {
@@ -37,6 +42,10 @@ export function getQueue(
       return BatchExportQueue.getInstance();
     case QueueName.CloudUsageMeteringQueue:
       return CloudUsageMeteringQueue.getInstance();
+    case QueueName.CloudSpendAlertQueue:
+      return CloudSpendAlertQueue.getInstance();
+    case QueueName.CloudFreeTierUsageThresholdQueue:
+      return CloudFreeTierUsageThresholdQueue.getInstance();
     case QueueName.DatasetRunItemUpsert:
       return DatasetRunItemUpsertQueue.getInstance();
     case QueueName.DatasetDelete:
@@ -79,6 +88,8 @@ export function getQueue(
       return WebhookQueue.getInstance();
     case QueueName.EntityChangeQueue:
       return EntityChangeQueue.getInstance();
+    case QueueName.EventPropagationQueue:
+      return EventPropagationQueue.getInstance();
     default: {
       // eslint-disable-next-line no-case-declarations, no-unused-vars
       const exhaustiveCheckDefault: never = queueName;

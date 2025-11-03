@@ -27,17 +27,14 @@ import "core-js/features/array/to-reversed";
 import "core-js/features/array/to-spliced";
 import "core-js/features/array/to-sorted";
 
-// Other CSS
 import "react18-json-view/src/style.css";
+
 import { DetailPageListsProvider } from "@/src/features/navigate-detail-pages/context";
 import { env } from "@/src/env.mjs";
 import { ThemeProvider } from "@/src/features/theming/ThemeProvider";
 import { MarkdownContextProvider } from "@/src/features/theming/useMarkdownContext";
-import { useQueryProjectOrOrganization } from "@/src/features/projects/hooks";
-import PlainChat, {
-  chatSetCustomer,
-  chatSetThreadDetails,
-} from "@/src/features/support-chat/PlainChat";
+import { SupportDrawerProvider } from "@/src/features/support-chat/SupportDrawerProvider";
+import { useLangfuseCloudRegion } from "@/src/features/organizations/hooks";
 
 // Check that PostHog is client-side (used to handle Next.js SSR) and that env vars are set
 if (
@@ -103,14 +100,15 @@ const MyApp: AppType<{ session: Session | null }> = ({
                     enableSystem
                     disableTransitionOnChange
                   >
-                    <Layout>
-                      <Component {...pageProps} />
-                      <UserTracking />
-                    </Layout>
+                    <SupportDrawerProvider defaultOpen={false}>
+                      <Layout>
+                        <Component {...pageProps} />
+                        <UserTracking />
+                      </Layout>
+                    </SupportDrawerProvider>
                     <BetterStackUptimeStatusMessage />
                   </ThemeProvider>
                 </MarkdownContextProvider>
-                <PlainChat />
               </DetailPageListsProvider>
             </SessionProvider>
           </PostHogProvider>
@@ -124,8 +122,8 @@ export default api.withTRPC(MyApp);
 
 function UserTracking() {
   const session = useSession();
+  const { region } = useLangfuseCloudRegion();
   const sessionUser = session.data?.user;
-  const { organization } = useQueryProjectOrOrganization();
 
   // Track user identity and properties
   const lastIdentifiedUser = useRef<string | null>(null);
@@ -150,21 +148,13 @@ function UserTracking() {
                 organization: org,
               })),
             ) ?? undefined,
-          LANGFUSE_CLOUD_REGION: env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION,
+          LANGFUSE_CLOUD_REGION: region,
         });
 
       // Sentry
       setUser({
         email: sessionUser.email ?? undefined,
         id: sessionUser.id ?? undefined,
-      });
-
-      // Chat
-      chatSetCustomer({
-        email: sessionUser.email ?? undefined,
-        fullName: sessionUser.name ?? undefined,
-        emailHash: sessionUser.emailSupportHash ?? undefined,
-        chatAvatarUrl: sessionUser.image ?? undefined,
       });
     } else if (session.status === "unauthenticated") {
       lastIdentifiedUser.current = null;
@@ -175,23 +165,7 @@ function UserTracking() {
       // Sentry
       setUser(null);
     }
-  }, [sessionUser, session.status]);
-
-  // update chat thread details
-  const plan = organization?.plan;
-  // const currentOrgIsDemoOrg =
-  //   env.NEXT_PUBLIC_DEMO_ORG_ID &&
-  //   organization?.id &&
-  //   organization.id === env.NEXT_PUBLIC_DEMO_ORG_ID;
-  // const projectRole = project?.role;
-  // const organizationRole = organization?.role;
-  const organizationId = organization?.id;
-  useEffect(() => {
-    chatSetThreadDetails({
-      orgId: organizationId ?? undefined,
-      plan: plan ?? undefined,
-    });
-  }, [plan, organizationId]);
+  }, [sessionUser, session.status, region]);
 
   // add stripe link to chat
   // const orgStripeLink = organization?.cloudConfig?.stripe?.customerId
@@ -222,7 +196,8 @@ if (
 }
 
 function BetterStackUptimeStatusMessage() {
-  if (!env.NEXT_PUBLIC_LANGFUSE_CLOUD_REGION) return null;
+  const { isLangfuseCloud } = useLangfuseCloudRegion();
+  if (!isLangfuseCloud) return null;
   return (
     <script
       src="https://uptime.betterstack.com/widgets/announcement.js"

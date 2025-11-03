@@ -88,6 +88,14 @@ export type ObservationRecordInsertType = z.infer<
   typeof observationRecordInsertSchema
 >;
 
+export const observationBatchStagingRecordInsertSchema =
+  observationRecordInsertSchema.extend({
+    s3_first_seen_timestamp: z.number(),
+  });
+export type ObservationBatchStagingRecordInsertType = z.infer<
+  typeof observationBatchStagingRecordInsertSchema
+>;
+
 export const traceRecordBaseSchema = z.object({
   id: z.string(),
   name: z.string().nullish(),
@@ -179,6 +187,7 @@ export const scoreRecordBaseSchema = z.object({
   data_type: z.enum(["NUMERIC", "CATEGORICAL", "BOOLEAN"]).nullish(),
   string_value: z.string().nullish(),
   queue_id: z.string().nullish(),
+  execution_trace_id: z.string().nullish(),
   is_deleted: z.number(),
 });
 
@@ -225,6 +234,17 @@ const datasetRunItemRecordReadSchema = datasetRunItemRecordBaseSchema.extend({
 export type DatasetRunItemRecordReadType = z.infer<
   typeof datasetRunItemRecordReadSchema
 >;
+// Conditional type for dataset run item records with optional IO
+export type DatasetRunItemRecord<WithIO extends boolean = true> =
+  WithIO extends true
+    ? DatasetRunItemRecordReadType
+    : Omit<
+        DatasetRunItemRecordReadType,
+        | "dataset_run_metadata"
+        | "dataset_item_input"
+        | "dataset_item_expected_output"
+        | "dataset_item_metadata"
+      >;
 
 export const datasetRunItemRecordInsertSchema =
   datasetRunItemRecordBaseSchema.extend({
@@ -311,6 +331,68 @@ export const convertScoreReadToInsert = (
     updated_at: new Date(record.updated_at).getTime(),
     timestamp: new Date(record.timestamp).getTime(),
     event_ts: new Date(record.event_ts).getTime(),
+  };
+};
+
+/**
+ * Converts a trace record to a staging observation record.
+ * The trace is treated as a synthetic "SPAN" where span_id = trace_id.
+ * This allows traces to flow through the same batch propagation pipeline as observations.
+ */
+export const convertTraceToStagingObservation = (
+  traceRecord: TraceRecordInsertType,
+  s3FirstSeenTimestamp: number,
+): ObservationBatchStagingRecordInsertType => {
+  return {
+    // Identity - trace acts as its own span. Modify traceId to avoid cases where users set spanId = traceId.
+    id: `t-${traceRecord.id}`,
+    trace_id: traceRecord.id,
+    project_id: traceRecord.project_id,
+
+    // Type: pretend trace is a SPAN
+    type: "SPAN",
+
+    // No parent since traces are root-level
+    parent_observation_id: undefined,
+
+    // Core fields from trace
+    name: traceRecord.name,
+    environment: traceRecord.environment,
+    version: traceRecord.version,
+    metadata: traceRecord.metadata,
+
+    // Timing: trace.timestamp -> start_time
+    start_time: traceRecord.timestamp,
+    end_time: undefined,
+    completion_start_time: undefined,
+
+    // IO fields
+    input: traceRecord.input,
+    output: traceRecord.output,
+
+    // Default values for observation-specific fields
+    level: "DEFAULT",
+    status_message: undefined,
+    provided_model_name: undefined,
+    internal_model_id: undefined,
+    model_parameters: undefined,
+    provided_usage_details: {},
+    usage_details: {},
+    provided_cost_details: {},
+    cost_details: {},
+    total_cost: undefined,
+    prompt_id: undefined,
+    prompt_name: undefined,
+    prompt_version: undefined,
+
+    // System fields
+    created_at: traceRecord.created_at,
+    updated_at: traceRecord.updated_at,
+    event_ts: traceRecord.event_ts,
+    is_deleted: traceRecord.is_deleted,
+
+    // Staging-specific field
+    s3_first_seen_timestamp: s3FirstSeenTimestamp,
   };
 };
 
@@ -490,6 +572,7 @@ export const convertPostgresScoreToInsert = (
     data_type: score.data_type,
     string_value: score.string_value,
     queue_id: score.queue_id,
+    execution_trace_id: null, // Postgres scores do not have eval execution traces
     created_at: score.created_at?.getTime(),
     updated_at: score.updated_at?.getTime(),
     event_ts: score.timestamp?.getTime(),
@@ -497,127 +580,93 @@ export const convertPostgresScoreToInsert = (
   };
 };
 
-export const convertTraceToTraceNull = (
-  traceRecord: TraceRecordInsertType,
-): TraceNullRecordInsertType => {
-  return {
-    // Identifiers
-    project_id: traceRecord.project_id,
-    id: traceRecord.id,
-    start_time: traceRecord.timestamp,
-    end_time: null, // traces don't have end_time, will be null
-    name: traceRecord.name || null,
+export const eventRecordBaseSchema = z.object({
+  // Identifiers
+  org_id: z.string().nullish(),
+  project_id: z.string(),
+  trace_id: z.string(),
+  span_id: z.string(),
+  // We mainly use the id for compatibility with old events that always had a `id` column.
+  id: z.string(), // same as span_id. Needs to be set manually.
+  parent_span_id: z.string().nullish(),
 
-    // Metadata properties
-    metadata: traceRecord.metadata,
-    user_id: traceRecord.user_id || null,
-    session_id: traceRecord.session_id || null,
-    environment: traceRecord.environment,
-    tags: traceRecord.tags,
-    version: traceRecord.version || null,
-    release: traceRecord.release || null,
+  // Core properties
+  name: z.string(),
+  type: z.string(),
+  environment: z.string().default("default"),
+  version: z.string().nullish(),
 
-    // UI properties - nullable to prevent absent values being interpreted as overwrites
-    bookmarked: traceRecord.bookmarked ?? null,
-    public: traceRecord.public ?? null,
+  user_id: z.string().nullish(),
+  session_id: z.string().nullish(),
 
-    // Aggregations - empty for now, will be populated by aggregation processes
-    observation_ids: [],
-    score_ids: [],
-    cost_details: {},
-    usage_details: {},
+  level: z.string(),
+  status_message: z.string().nullish(),
 
-    // Input/Output
-    input: traceRecord.input || "",
-    output: traceRecord.output || "",
+  // Prompt
+  prompt_id: z.string().nullish(),
+  prompt_name: z.string().nullish(),
+  prompt_version: z.string().nullish(),
 
-    created_at: traceRecord.created_at,
-    updated_at: traceRecord.updated_at,
-    event_ts: traceRecord.event_ts,
-  };
-};
+  // Model
+  model_id: z.string().nullish(),
+  provided_model_name: z.string().nullish(),
+  model_parameters: z.string().nullish(),
 
-export const convertObservationToTraceNull = (
-  observationRecord: ObservationRecordInsertType,
-): TraceNullRecordInsertType => {
-  return {
-    // Identifiers
-    project_id: observationRecord.project_id,
-    // Use trace_id as the id in traces_null. Always set given the conditions around calling the function
-    id: observationRecord.trace_id || "",
-    start_time: observationRecord.start_time,
-    end_time: observationRecord.end_time || null,
-    name: null,
+  // Usage & Cost
+  provided_usage_details: UsageCostSchema,
+  usage_details: UsageCostSchema,
+  provided_cost_details: UsageCostSchema,
+  cost_details: UsageCostSchema,
+  total_cost: z.number().nullish(),
 
-    // Metadata properties
-    metadata: {},
-    user_id: null,
-    session_id: null,
-    environment: observationRecord.environment,
-    tags: [],
-    version: null,
-    release: null,
+  // I/O
+  input: z.string().nullish(),
+  output: z.string().nullish(),
 
-    // UI properties - nullable to prevent absent values being interpreted as overwrites
-    bookmarked: null,
-    public: null,
+  // Metadata - multiple approaches supported
+  metadata: z.record(z.string(), z.string()),
+  metadata_names: z.array(z.string()).default([]),
+  metadata_values: z.array(z.any()).default([]),
+  metadata_string_names: z.array(z.string()).default([]),
+  metadata_string_values: z.array(z.string()).default([]),
+  metadata_number_names: z.array(z.string()).default([]),
+  metadata_number_values: z.array(z.number()).default([]),
+  metadata_bool_names: z.array(z.string()).default([]),
+  metadata_bool_values: z.array(z.number()).default([]),
 
-    // Aggregations - include this observation ID
-    observation_ids: [observationRecord.id],
-    score_ids: [],
-    // We can fill the cost details here, but we shouldn't trust them.
-    // Only used for verification to estimate how big the double-counting is.
-    // Actually, we don't as this will make backfills challenging.
-    cost_details: {}, // observationRecord.cost_details || {},
-    usage_details: {}, // observationRecord.usage_details || {},
+  // Source metadata (Instrumentation)
+  source: z.string(),
+  service_name: z.string().nullish(),
+  service_version: z.string().nullish(),
+  scope_name: z.string().nullish(),
+  scope_version: z.string().nullish(),
+  telemetry_sdk_language: z.string().nullish(),
+  telemetry_sdk_name: z.string().nullish(),
+  telemetry_sdk_version: z.string().nullish(),
 
-    // Input/Output
-    input: "",
-    output: "",
+  // Generic props
+  blob_storage_file_path: z.string(),
+  event_raw: z.string(),
+  event_bytes: z.number(),
+  is_deleted: z.number(),
+});
 
-    created_at: observationRecord.created_at,
-    updated_at: observationRecord.updated_at,
-    event_ts: observationRecord.event_ts,
-  };
-};
+export const eventRecordReadSchema = eventRecordBaseSchema.extend({
+  start_time: clickhouseStringDateSchema,
+  end_time: clickhouseStringDateSchema.nullish(),
+  completion_start_time: clickhouseStringDateSchema.nullish(),
+  created_at: clickhouseStringDateSchema,
+  updated_at: clickhouseStringDateSchema,
+  event_ts: clickhouseStringDateSchema,
+});
+export type EventRecordReadType = z.infer<typeof eventRecordReadSchema>;
 
-export const convertScoreToTraceNull = (
-  scoreRecord: ScoreRecordInsertType,
-): TraceNullRecordInsertType => {
-  return {
-    // Identifiers
-    project_id: scoreRecord.project_id,
-    // Use trace_id as the id in traces_null. Always set given the conditions around calling the function
-    id: scoreRecord.trace_id || "",
-    start_time: scoreRecord.timestamp,
-    end_time: null, // scores don't have end_time
-    name: null,
-
-    // Metadata properties
-    metadata: {},
-    user_id: null,
-    session_id: null,
-    environment: scoreRecord.environment,
-    tags: [], // scores don't have tags
-    version: null, // scores don't have version
-    release: null, // scores don't have release
-
-    // UI properties - nullable to prevent absent values being interpreted as overwrites
-    bookmarked: null,
-    public: null,
-
-    // Aggregations - include this score ID
-    observation_ids: [],
-    score_ids: [scoreRecord.id],
-    cost_details: {},
-    usage_details: {},
-
-    // Input/Output
-    input: "", // scores don't have input
-    output: "", // scores don't have output
-
-    created_at: scoreRecord.created_at,
-    updated_at: scoreRecord.updated_at,
-    event_ts: scoreRecord.event_ts,
-  };
-};
+export const eventRecordInsertSchema = eventRecordBaseSchema.extend({
+  start_time: z.number(),
+  end_time: z.number().nullish(),
+  completion_start_time: z.number().nullish(),
+  created_at: z.number(),
+  updated_at: z.number(),
+  event_ts: z.number(),
+});
+export type EventRecordInsertType = z.infer<typeof eventRecordInsertSchema>;

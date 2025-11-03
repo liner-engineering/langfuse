@@ -26,6 +26,7 @@ import { useOrderByState } from "@/src/features/orderBy/hooks/useOrderByState";
 import { useRowHeightLocalStorage } from "@/src/components/table/data-table-row-height-switch";
 import { MemoizedIOTableCell } from "../../ui/IOTableCell";
 import { useTableDateRange } from "@/src/hooks/useTableDateRange";
+import { toAbsoluteTimeRange } from "@/src/utils/date-range-utils";
 import { useDebounce } from "@/src/hooks/useDebounce";
 import { type ScoreAggregate } from "@langfuse/shared";
 import TagList from "@/src/features/tag/components/TagList";
@@ -45,18 +46,17 @@ import TableIdOrName from "@/src/components/table/table-id";
 import { ItemBadge } from "@/src/components/ItemBadge";
 import { Skeleton } from "@/src/components/ui/skeleton";
 import { PeekViewObservationDetail } from "@/src/components/table/peek/peek-observation-detail";
-import { useObservationPeekState } from "@/src/components/table/peek/hooks/useObservationPeekState";
+import { usePeekNavigation } from "@/src/components/table/peek/hooks/usePeekNavigation";
 import { useDetailPageLists } from "@/src/features/navigate-detail-pages/context";
-import { useObservationPeekNavigation } from "@/src/components/table/peek/hooks/useObservationPeekNavigation";
 import { useTableViewManager } from "@/src/components/table/table-view-presets/hooks/useTableViewManager";
 import { useRouter } from "next/router";
 import { useFullTextSearch } from "@/src/components/table/use-cases/useFullTextSearch";
-import { type PeekViewProps } from "@/src/components/table/peek/hooks/usePeekView";
 import { TableSelectionManager } from "@/src/features/table/components/TableSelectionManager";
 import { useSelectAll } from "@/src/features/table/hooks/useSelectAll";
 import { showSuccessToast } from "@/src/features/notifications/showSuccessToast";
 import { TableActionMenu } from "@/src/features/table/components/TableActionMenu";
 import { type TableAction } from "@/src/features/table/types";
+import { type DataTablePeekViewProps } from "@/src/components/table/peek";
 import { useScoreColumns } from "@/src/features/scores/hooks/useScoreColumns";
 import { scoreFilters } from "@/src/features/scores/lib/scoreColumns";
 
@@ -167,8 +167,12 @@ export default function ObservationsTable({
     order: "DESC",
   });
 
-  const { selectedOption, dateRange, setDateRangeAndOption } =
-    useTableDateRange(projectId);
+  const { timeRange, setTimeRange } = useTableDateRange(projectId);
+
+  // Convert timeRange to absolute date range for compatibility
+  const dateRange = useMemo(() => {
+    return toAbsoluteTimeRange(timeRange) ?? undefined;
+  }, [timeRange]);
 
   const promptNameFilter: FilterState = promptName
     ? [
@@ -206,17 +210,30 @@ export default function ObservationsTable({
   const dateRangeFilter: FilterState = dateRange
     ? [
         {
-          column: "Start Time",
+          column: "startTime",
           type: "datetime",
           operator: ">=",
           value: dateRange.from,
         },
+        ...(dateRange.to
+          ? [
+              {
+                column: "startTime",
+                type: "datetime",
+                operator: "<=",
+                value: dateRange.to,
+              } as const,
+            ]
+          : []),
       ]
     : [];
 
   const environmentFilterOptions =
     api.projects.environmentFilterOptions.useQuery(
-      { projectId },
+      {
+        projectId,
+        fromTimestamp: dateRange?.from,
+      },
       {
         trpc: { context: { skipBatch: true } },
         refetchOnMount: false,
@@ -311,7 +328,10 @@ export default function ObservationsTable({
         generations.data.generations.map((g) => ({
           id: g.id,
           params: g.traceTimestamp
-            ? { timestamp: g.traceTimestamp.toISOString() }
+            ? {
+                timestamp: g.traceTimestamp.toISOString(),
+                traceId: g.traceId || "",
+              }
             : undefined,
         })),
       );
@@ -331,7 +351,10 @@ export default function ObservationsTable({
     filterOptions: ObservationOptions | undefined,
   ) => {
     return observationsTableColsWithOptions(filterOptions).filter(
-      (col) => !omittedFilter?.includes(col.name),
+      (col) =>
+        col.id !== "startTime" &&
+        col.id !== "endTime" &&
+        !omittedFilter?.includes(col.name),
     );
   };
 
@@ -847,11 +870,11 @@ export default function ObservationsTable({
           enableSorting: true,
           cell: ({ row }: { row: Row<ObservationsTableRow> }) => {
             const value: {
-              promptTokens: number;
-              completionTokens: number;
-              totalTokens: number;
+              inputUsage: number;
+              outputUsage: number;
+              totalUsage: number;
             } = row.getValue("usage");
-            return <span>{numberFormatter(value.promptTokens, 0)}</span>;
+            return <span>{numberFormatter(value.inputUsage, 0)}</span>;
           },
         },
         {
@@ -864,11 +887,11 @@ export default function ObservationsTable({
           enableSorting: true,
           cell: ({ row }: { row: Row<ObservationsTableRow> }) => {
             const value: {
-              promptTokens: number;
-              completionTokens: number;
-              totalTokens: number;
+              inputUsage: number;
+              outputUsage: number;
+              totalUsage: number;
             } = row.getValue("usage");
-            return <span>{numberFormatter(value.completionTokens, 0)}</span>;
+            return <span>{numberFormatter(value.outputUsage, 0)}</span>;
           },
         },
         {
@@ -881,11 +904,11 @@ export default function ObservationsTable({
           enableSorting: true,
           cell: ({ row }: { row: Row<ObservationsTableRow> }) => {
             const value: {
-              promptTokens: number;
-              completionTokens: number;
-              totalTokens: number;
+              inputUsage: number;
+              outputUsage: number;
+              totalUsage: number;
             } = row.getValue("usage");
-            return <span>{numberFormatter(value.totalTokens, 0)}</span>;
+            return <span>{numberFormatter(value.totalUsage, 0)}</span>;
           },
         },
       ],
@@ -908,10 +931,13 @@ export default function ObservationsTable({
           header: "Input Cost",
           size: 120,
           cell: ({ row }: { row: Row<ObservationsTableRow> }) => {
-            const value: number | undefined = row.getValue("inputCost");
+            const value: {
+              inputCost: number | undefined;
+              outputCost: number | undefined;
+            } = row.getValue("cost");
 
-            return value !== undefined ? (
-              <span>{usdFormatter(value)}</span>
+            return value.inputCost !== undefined ? (
+              <span>{usdFormatter(value.inputCost)}</span>
             ) : undefined;
           },
           enableHiding: true,
@@ -924,10 +950,13 @@ export default function ObservationsTable({
           header: "Output Cost",
           size: 120,
           cell: ({ row }: { row: Row<ObservationsTableRow> }) => {
-            const value: number | undefined = row.getValue("outputCost");
+            const value: {
+              inputCost: number | undefined;
+              outputCost: number | undefined;
+            } = row.getValue("cost");
 
-            return value !== undefined ? (
-              <span>{usdFormatter(value)}</span>
+            return value.outputCost !== undefined ? (
+              <span>{usdFormatter(value.outputCost)}</span>
             ) : undefined;
           },
           enableHiding: true,
@@ -949,8 +978,19 @@ export default function ObservationsTable({
     columns,
   );
 
-  const { getNavigationPath, expandPeek } = useObservationPeekNavigation();
-  const { setPeekView } = useObservationPeekState();
+  const peekNavigationProps = usePeekNavigation({
+    queryParams: ["observation", "display", "timestamp", "traceId"],
+    paramsToMirrorPeekValue: ["observation"],
+    extractParamsValuesFromRow: (row: ObservationsTableRow) => ({
+      traceId: row.traceId || "",
+      timestamp: row.timestamp?.toISOString() || "",
+    }),
+    expandConfig: {
+      basePath: `/project/${projectId}/traces`,
+      pathParam: "traceId",
+    },
+  });
+
   const { isLoading: isViewLoading, ...viewControllers } = useTableViewManager({
     tableName: TableViewPresetTableName.Observations,
     projectId,
@@ -967,27 +1007,16 @@ export default function ObservationsTable({
     },
   });
 
-  const peekConfig: PeekViewProps<ObservationsTableRow> = useMemo(
+  const peekConfig: DataTablePeekViewProps = useMemo(
     () => ({
       itemType: "TRACE",
       customTitlePrefix: "Observation ID:",
-      listKey: "observations",
-      onOpenChange: setPeekView,
-      onExpand: expandPeek,
-      shouldUpdateRowOnDetailPageNavigation: true,
-      getNavigationPath,
-      children: (row?: ObservationsTableRow) => (
-        <PeekViewObservationDetail projectId={projectId} row={row} />
-      ),
+      detailNavigationKey: "observations",
+      children: <PeekViewObservationDetail projectId={projectId} />,
       tableDataUpdatedAt: generations.dataUpdatedAt,
+      ...peekNavigationProps,
     }),
-    [
-      projectId,
-      generations.dataUpdatedAt,
-      getNavigationPath,
-      expandPeek,
-      setPeekView,
-    ],
+    [projectId, generations.dataUpdatedAt, peekNavigationProps],
   );
 
   const rows: ObservationsTableRow[] = useMemo(() => {
@@ -1060,8 +1089,8 @@ export default function ObservationsTable({
         orderByState={orderByState}
         rowHeight={rowHeight}
         setRowHeight={setRowHeight}
-        selectedOption={selectedOption}
-        setDateRangeAndOption={setDateRangeAndOption}
+        timeRange={timeRange}
+        setTimeRange={setTimeRange}
         actionButtons={[
           <BatchExportTableButton
             {...{
@@ -1138,6 +1167,34 @@ export default function ObservationsTable({
         columnVisibility={columnVisibility}
         onColumnVisibilityChange={setColumnVisibilityState}
         rowHeight={rowHeight}
+        onRowClick={(row, event) => {
+          // Handle Command/Ctrl+click to open observation in new tab
+          if (event && (event.metaKey || event.ctrlKey)) {
+            // Prevent the default peek behavior
+            event.preventDefault();
+
+            // Construct the observation URL directly to avoid race conditions
+            const observationId = row.id;
+            const traceId = row.traceId;
+            const timestamp = row.timestamp;
+
+            if (traceId) {
+              let observationUrl = `/project/${projectId}/traces/${encodeURIComponent(traceId)}`;
+
+              const params = new URLSearchParams();
+              params.set("observation", observationId);
+              if (timestamp) {
+                params.set("timestamp", timestamp.toISOString());
+              }
+
+              observationUrl += `?${params.toString()}`;
+
+              const fullUrl = `${process.env.NEXT_PUBLIC_BASE_PATH ?? ""}${observationUrl}`;
+              window.open(fullUrl, "_blank");
+            }
+          }
+          // For normal clicks, let the data-table handle opening the peek view
+        }}
       />
     </>
   );

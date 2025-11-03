@@ -8,6 +8,7 @@ import {
   JobExecutionStatus,
   PrismaClient,
   type Project,
+  ScoreConfigCategoryDomain,
   ScoreDataType,
 } from "../../src/index";
 import { getDisplaySecretKey, hashSecretKey, logger } from "../../src/server";
@@ -28,11 +29,6 @@ import {
   generateEvalScoreId,
   generateEvalTraceId,
 } from "./utils/seed-helpers";
-
-type ConfigCategory = {
-  label: string;
-  value: number;
-};
 
 const options = {
   environment: { type: "string" },
@@ -109,6 +105,9 @@ async function main() {
       orgId: seedOrgId,
     },
   });
+
+  // Realistic support chat scenario
+  await createSupportChatSession(project1);
 
   await prisma.organizationMembership.upsert({
     where: {
@@ -533,23 +532,13 @@ export async function createDatasets(
         const datasetItem = await prisma.datasetItem.upsert({
           where: {
             id_projectId: {
-              id: generateDatasetItemId(
-                datasetName,
-                index,
-                projectId,
-                SEED_DATASETS.indexOf(data) || 0,
-              ),
+              id: generateDatasetItemId(datasetName, index, projectId),
               projectId,
             },
           },
           create: {
             projectId,
-            id: generateDatasetItemId(
-              datasetName,
-              index,
-              projectId,
-              SEED_DATASETS.indexOf(data) || 0,
-            ),
+            id: generateDatasetItemId(datasetName, index, projectId),
             datasetId: dataset.id,
             sourceTraceId: sourceTraceId ?? null,
             sourceObservationId: null,
@@ -733,6 +722,7 @@ async function generatePrompts(project: Project) {
         createdBy: version.createdBy,
         prompt: version.prompt,
         name: version.name,
+        type: version.type ?? "text",
         config: version.config,
         version: version.version,
         labels: version.labels,
@@ -754,7 +744,7 @@ async function generateConfigsForProject(projects: Project[]) {
       name: string;
       id: string;
       dataType: ScoreDataType;
-      categories: ConfigCategory[] | null;
+      categories: ScoreConfigCategoryDomain[] | null;
     }[]
   > = new Map();
 
@@ -781,12 +771,30 @@ async function createTraceSessions(project1: Project, project2: Project) {
   }
 }
 
+async function createSupportChatSession(project: Project) {
+  const sessionId = "support-chat-session";
+  await prisma.traceSession.upsert({
+    where: {
+      id_projectId: {
+        id: sessionId,
+        projectId: project.id,
+      },
+    },
+    create: {
+      id: sessionId,
+      projectId: project.id,
+      environment: "default",
+    },
+    update: {},
+  });
+}
+
 async function generateConfigs(project: Project) {
   const configNameAndId: {
     name: string;
     id: string;
     dataType: ScoreDataType;
-    categories: ConfigCategory[] | null;
+    categories: ScoreConfigCategoryDomain[] | null;
   }[] = [];
 
   const configs = [
@@ -863,7 +871,7 @@ async function generateQueuesForProject(
       name: string;
       id: string;
       dataType: ScoreDataType;
-      categories: ConfigCategory[] | null;
+      categories: ScoreConfigCategoryDomain[] | null;
     }[]
   >,
 ) {
@@ -887,7 +895,7 @@ async function generateQueues(
     name: string;
     id: string;
     dataType: ScoreDataType;
-    categories: ConfigCategory[] | null;
+    categories: ScoreConfigCategoryDomain[] | null;
   }[],
 ) {
   const queue = {

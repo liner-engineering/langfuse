@@ -19,16 +19,45 @@ import { Storage, Bucket, GetSignedUrlConfig } from "@google-cloud/storage";
 import { logger } from "../logger";
 import { env } from "../../env";
 import { backOff } from "exponential-backoff";
+import { ServiceUnavailableError } from "../../errors";
 
 type UploadFile = {
   fileName: string;
   fileType: string;
   data: Readable | string;
+};
+
+type UploadWithSignedUrl = UploadFile & {
   expiresInSeconds: number;
 };
 
+/**
+ * Check if an error is a DNS lookup failure (EAI_AGAIN)
+ * and throw ServiceUnavailableError if so, otherwise rethrow the original error
+ */
+function handleStorageError(err: unknown, operation: string): never {
+  // Check if error has a code property matching EAI_AGAIN
+  if (
+    err &&
+    typeof err === "object" &&
+    "code" in err &&
+    err.code === "EAI_AGAIN"
+  ) {
+    logger.error(`DNS lookup failure during ${operation}`, err);
+    throw new ServiceUnavailableError(
+      "Storage service temporarily unavailable due to network issues",
+    );
+  }
+  // For other errors, throw a generic error
+  throw Error(`Failed to ${operation}`);
+}
+
 export interface StorageService {
-  uploadFile(params: UploadFile): Promise<{ signedUrl: string }>; // eslint-disable-line no-unused-vars
+  uploadFile(params: UploadFile): Promise<void>; // eslint-disable-line no-unused-vars
+
+  uploadWithSignedUrl(
+    params: UploadWithSignedUrl, // eslint-disable-line no-unused-vars
+  ): Promise<{ signedUrl: string }>;
 
   uploadJson(path: string, body: Record<string, unknown>[]): Promise<void>; // eslint-disable-line no-unused-vars
 
@@ -157,12 +186,12 @@ class AzureBlobStorageService implements StorageService {
         `Failed to create Azure Blob Storage container ${this.container}`,
         err,
       );
-      throw Error("Failed to create Azure Blob Storage container ");
+      handleStorageError(err, "create Azure Blob Storage container");
     }
   }
 
-  public async uploadFile(params: UploadFile): Promise<{ signedUrl: string }> {
-    const { fileName, data, expiresInSeconds } = params;
+  public async uploadFile(params: UploadFile): Promise<void> {
+    const { fileName, data } = params;
     try {
       await this.createContainerIfNotExists();
 
@@ -196,6 +225,23 @@ class AzureBlobStorageService implements StorageService {
         throw new Error("Unsupported data type. Must be Readable or string.");
       }
 
+      return;
+    } catch (err) {
+      logger.error(
+        `Failed to upload file to Azure Blob Storage ${fileName}`,
+        err,
+      );
+      handleStorageError(err, "upload file to Azure Blob Storage");
+    }
+  }
+
+  public async uploadWithSignedUrl(
+    params: UploadWithSignedUrl,
+  ): Promise<{ signedUrl: string }> {
+    const { fileName, data, fileType, expiresInSeconds } = params;
+    try {
+      await this.uploadFile({ fileName, data, fileType });
+
       return {
         signedUrl: await this.getSignedUrl(fileName, expiresInSeconds, false),
       };
@@ -204,7 +250,7 @@ class AzureBlobStorageService implements StorageService {
         `Failed to upload file to Azure Blob Storage ${fileName}`,
         err,
       );
-      throw Error("Failed to upload file to Azure Blob Storage");
+      handleStorageError(err, "upload file to Azure Blob Storage");
     }
   }
 
@@ -220,7 +266,7 @@ class AzureBlobStorageService implements StorageService {
       await blockBlobClient.upload(content, content.length);
     } catch (err) {
       logger.error(`Failed to upload JSON to Azure Blob Storage ${path}`, err);
-      throw Error("Failed to upload JSON to Azure Blob Storage");
+      handleStorageError(err, "upload JSON to Azure Blob Storage");
     }
   }
 
@@ -254,7 +300,7 @@ class AzureBlobStorageService implements StorageService {
         `Failed to download file from Azure Blob Storage ${path}`,
         err,
       );
-      throw Error("Failed to download file from Azure Blob Storage");
+      handleStorageError(err, "download file from Azure Blob Storage");
     }
   }
 
@@ -279,7 +325,7 @@ class AzureBlobStorageService implements StorageService {
         `Failed to delete files from Azure Blob Storage ${paths}`,
         err,
       );
-      throw Error("Failed to delete files from Azure Blob Storage");
+      handleStorageError(err, "delete files from Azure Blob Storage");
     }
   }
 
@@ -305,7 +351,7 @@ class AzureBlobStorageService implements StorageService {
         `Failed to list files from Azure Blob Storage ${prefix}`,
         err,
       );
-      throw Error("Failed to list files from Azure Blob Storage");
+      handleStorageError(err, "list files from Azure Blob Storage");
     }
   }
 
@@ -337,7 +383,7 @@ class AzureBlobStorageService implements StorageService {
         `Failed to generate presigned URL for Azure Blob Storage ${fileName}`,
         err,
       );
-      throw Error("Failed to generate presigned URL for Azure Blob Storage");
+      handleStorageError(err, "generate presigned URL for Azure Blob Storage");
     }
   }
 
@@ -370,8 +416,9 @@ class AzureBlobStorageService implements StorageService {
         `Failed to generate presigned upload URL for Azure Blob Storage ${path}`,
         err,
       );
-      throw Error(
-        "Failed to generate presigned upload URL for Azure Blob Storage",
+      handleStorageError(
+        err,
+        "generate presigned upload URL for Azure Blob Storage",
       );
     }
   }
@@ -454,8 +501,7 @@ class S3StorageService implements StorageService {
     fileName,
     fileType,
     data,
-    expiresInSeconds,
-  }: UploadFile): Promise<{ signedUrl: string }> {
+  }: UploadFile): Promise<void> {
     try {
       await new Upload({
         client: this.client,
@@ -467,12 +513,28 @@ class S3StorageService implements StorageService {
         }),
       }).done();
 
+      return;
+    } catch (err) {
+      logger.error(`Failed to upload file to ${fileName}`, err);
+      handleStorageError(err, "upload file to S3");
+    }
+  }
+
+  public async uploadWithSignedUrl({
+    fileName,
+    fileType,
+    data,
+    expiresInSeconds,
+  }: UploadWithSignedUrl): Promise<{ signedUrl: string }> {
+    try {
+      await this.uploadFile({ fileName, data, fileType });
+
       const signedUrl = await this.getSignedUrl(fileName, expiresInSeconds);
 
       return { signedUrl };
     } catch (err) {
       logger.error(`Failed to upload file to ${fileName}`, err);
-      throw new Error(`Failed to upload to S3 or generate signed URL: ${err}`);
+      handleStorageError(err, "upload file to S3 or generate signed URL");
     }
   }
 
@@ -490,7 +552,7 @@ class S3StorageService implements StorageService {
       await this.client.send(putCommand);
     } catch (err) {
       logger.error(`Failed to upload JSON to S3 ${path}`, err);
-      throw Error("Failed to upload JSON to S3");
+      handleStorageError(err, "upload JSON to S3");
     }
   }
 
@@ -505,7 +567,7 @@ class S3StorageService implements StorageService {
       return (await response.Body?.transformToString()) ?? "";
     } catch (err) {
       logger.error(`Failed to download file from S3 ${path}`, err);
-      throw Error("Failed to download file from S3");
+      handleStorageError(err, "download file from S3");
     }
   }
 
@@ -529,7 +591,7 @@ class S3StorageService implements StorageService {
       );
     } catch (err) {
       logger.error(`Failed to list files from S3 ${prefix}`, err);
-      throw Error("Failed to list files from S3");
+      handleStorageError(err, "list files from S3");
     }
   }
 
@@ -552,7 +614,7 @@ class S3StorageService implements StorageService {
       );
     } catch (err) {
       logger.error(`Failed to generate presigned URL for ${fileName}`, err);
-      throw Error("Failed to generate signed URL");
+      handleStorageError(err, "generate signed URL");
     }
   }
 
@@ -594,7 +656,7 @@ class S3StorageService implements StorageService {
         error: err,
         files: paths,
       });
-      throw new Error("Failed to delete files from S3");
+      handleStorageError(err, "delete files from S3");
     }
   }
 
@@ -663,8 +725,7 @@ class GoogleCloudStorageService implements StorageService {
     fileName,
     fileType,
     data,
-    expiresInSeconds,
-  }: UploadFile): Promise<{ signedUrl: string }> {
+  }: UploadFile): Promise<void> {
     try {
       const file = this.bucket.file(fileName);
       const options = {
@@ -674,27 +735,18 @@ class GoogleCloudStorageService implements StorageService {
 
       if (typeof data === "string") {
         await file.save(data, options);
-        const signedUrl = await this.getSignedUrl(fileName, expiresInSeconds);
-        return { signedUrl };
+        return;
       } else if (data instanceof Readable) {
         return new Promise((resolve, reject) => {
           const writeStream = file.createWriteStream(options);
 
           data
             .pipe(writeStream)
-            .on("error", (err) => {
+            .on("error", (err: unknown) => {
               reject(err);
             })
-            .on("finish", async () => {
-              try {
-                const signedUrl = await this.getSignedUrl(
-                  fileName,
-                  expiresInSeconds,
-                );
-                resolve({ signedUrl });
-              } catch (err) {
-                reject(err);
-              }
+            .on("finish", () => {
+              resolve();
             });
         });
       } else {
@@ -705,7 +757,26 @@ class GoogleCloudStorageService implements StorageService {
         `Failed to upload file to Google Cloud Storage ${fileName}`,
         err,
       );
-      throw new Error("Failed to upload to Google Cloud Storage");
+      handleStorageError(err, "upload file to Google Cloud Storage");
+    }
+  }
+
+  public async uploadWithSignedUrl({
+    fileName,
+    fileType,
+    data,
+    expiresInSeconds,
+  }: UploadWithSignedUrl): Promise<{ signedUrl: string }> {
+    try {
+      await this.uploadFile({ fileName, data, fileType });
+      const signedUrl = await this.getSignedUrl(fileName, expiresInSeconds);
+      return { signedUrl };
+    } catch (err) {
+      logger.error(
+        `Failed to upload file to Google Cloud Storage ${fileName}`,
+        err,
+      );
+      handleStorageError(err, "upload file to Google Cloud Storage");
     }
   }
 
@@ -726,7 +797,7 @@ class GoogleCloudStorageService implements StorageService {
         `Failed to upload JSON to Google Cloud Storage ${path}`,
         err,
       );
-      throw Error("Failed to upload JSON to Google Cloud Storage");
+      handleStorageError(err, "upload JSON to Google Cloud Storage");
     }
   }
 
@@ -741,7 +812,7 @@ class GoogleCloudStorageService implements StorageService {
         `Failed to download file from Google Cloud Storage ${path}`,
         err,
       );
-      throw Error("Failed to download file from Google Cloud Storage");
+      handleStorageError(err, "download file from Google Cloud Storage");
     }
   }
 
@@ -760,7 +831,7 @@ class GoogleCloudStorageService implements StorageService {
         `Failed to list files from Google Cloud Storage ${prefix}`,
         err,
       );
-      throw Error("Failed to list files from Google Cloud Storage");
+      handleStorageError(err, "list files from Google Cloud Storage");
     }
   }
 
@@ -789,7 +860,7 @@ class GoogleCloudStorageService implements StorageService {
         `Failed to generate signed URL for Google Cloud Storage ${fileName}`,
         err,
       );
-      throw Error("Failed to generate signed URL for Google Cloud Storage");
+      handleStorageError(err, "generate signed URL for Google Cloud Storage");
     }
   }
 
@@ -822,8 +893,9 @@ class GoogleCloudStorageService implements StorageService {
         `Failed to generate signed upload URL for Google Cloud Storage ${path}`,
         err,
       );
-      throw Error(
-        "Failed to generate signed upload URL for Google Cloud Storage",
+      handleStorageError(
+        err,
+        "generate signed upload URL for Google Cloud Storage",
       );
     }
   }
@@ -838,7 +910,7 @@ class GoogleCloudStorageService implements StorageService {
       );
     } catch (err) {
       logger.error(`Failed to delete files from Google Cloud Storage`, err);
-      throw Error("Failed to delete files from Google Cloud Storage");
+      handleStorageError(err, "delete files from Google Cloud Storage");
     }
   }
 }

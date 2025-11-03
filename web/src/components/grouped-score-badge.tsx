@@ -5,8 +5,14 @@ import {
   HoverCardTrigger,
 } from "@/src/components/ui/hover-card";
 import { type LastUserScore, type APIScoreV2 } from "@langfuse/shared";
-import { BracesIcon, MessageCircleMoreIcon } from "lucide-react";
+import {
+  BracesIcon,
+  MessageCircleMoreIcon,
+  ExternalLinkIcon,
+} from "lucide-react";
 import { JSONView } from "@/src/components/ui/CodeJsonViewer";
+import Link from "next/link";
+import useProjectIdFromURL from "@/src/hooks/useProjectIdFromURL";
 
 const partitionScores = <T extends APIScoreV2 | LastUserScore>(
   scores: Record<string, T[]>,
@@ -46,6 +52,8 @@ const ScoreGroupBadge = <T extends APIScoreV2 | LastUserScore>({
   compact?: boolean;
   badgeClassName?: string;
 }) => {
+  const projectId = useProjectIdFromURL();
+
   return (
     <Badge
       variant="tertiary"
@@ -70,8 +78,20 @@ const ScoreGroupBadge = <T extends APIScoreV2 | LastUserScore>({
                 <HoverCardTrigger className="inline-block">
                   <MessageCircleMoreIcon className="mb-[0.0625rem] !size-3" />
                 </HoverCardTrigger>
-                <HoverCardContent className="max-h-[50dvh] overflow-y-auto whitespace-normal break-normal">
+                <HoverCardContent className="max-h-[50dvh] overflow-y-auto whitespace-normal break-normal text-xs">
                   <p className="whitespace-pre-wrap">{s.comment}</p>
+                  {"executionTraceId" in s &&
+                    s.executionTraceId &&
+                    projectId && (
+                      <Link
+                        href={`/project/${projectId}/traces/${encodeURIComponent(s.executionTraceId)}`}
+                        className="mt-2 flex items-center gap-1 text-blue-600 hover:underline"
+                        target="_blank"
+                      >
+                        <ExternalLinkIcon className="h-3 w-3" />
+                        View execution trace
+                      </Link>
+                    )}
                 </HoverCardContent>
               </HoverCard>
             )}
@@ -80,7 +100,7 @@ const ScoreGroupBadge = <T extends APIScoreV2 | LastUserScore>({
                 <HoverCardTrigger className="inline-block">
                   <BracesIcon className="mb-[0.0625rem] !size-3" />
                 </HoverCardTrigger>
-                <HoverCardContent className="max-h-[50dvh] overflow-y-auto whitespace-normal break-normal rounded-md border-none p-0">
+                <HoverCardContent className="max-h-[50dvh] overflow-y-auto whitespace-normal break-normal rounded-md border-none p-0 text-xs">
                   <JSONView codeClassName="!rounded-md" json={s.metadata} />
                 </HoverCardContent>
               </HoverCard>

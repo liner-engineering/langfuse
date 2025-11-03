@@ -560,6 +560,146 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/AnnotationQueueAssignmentRequest'
+  /api/public/integrations/blob-storage:
+    get:
+      description: >-
+        Get all blob storage integrations for the organization (requires
+        organization-scoped API key)
+      operationId: blobStorageIntegrations_getBlobStorageIntegrations
+      tags:
+        - BlobStorageIntegrations
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlobStorageIntegrationsResponse'
+        '400':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '401':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '403':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '405':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+      security:
+        - BasicAuth: []
+    put:
+      description: >-
+        Create or update a blob storage integration for a specific project
+        (requires organization-scoped API key). The configuration is validated
+        by performing a test upload to the bucket.
+      operationId: blobStorageIntegrations_upsertBlobStorageIntegration
+      tags:
+        - BlobStorageIntegrations
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlobStorageIntegrationResponse'
+        '400':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '401':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '403':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '405':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBlobStorageIntegrationRequest'
+  /api/public/integrations/blob-storage/{id}:
+    delete:
+      description: >-
+        Delete a blob storage integration by ID (requires organization-scoped
+        API key)
+      operationId: blobStorageIntegrations_deleteBlobStorageIntegration
+      tags:
+        - BlobStorageIntegrations
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BlobStorageIntegrationDeletionResponse'
+        '400':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '401':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '403':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '405':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+      security:
+        - BasicAuth: []
   /api/public/comments:
     post:
       description: >-
@@ -1412,11 +1552,11 @@ paths:
   /api/public/ingestion:
     post:
       description: >-
-        Batched ingestion for Langfuse Tracing.
+        **Legacy endpoint for batch ingestion for Langfuse Observability.**
 
-        If you want to use tracing via the API, such as to build your own
-        Langfuse client implementation, this is the only API route you need to
-        implement.
+
+        -> Please use the OpenTelemetry endpoint (`/api/public/otel/v1/traces`).
+        Learn more: https://langfuse.com/integrations/native/opentelemetry
 
 
         Within each batch, there can be multiple events.
@@ -1440,7 +1580,7 @@ paths:
         Notes:
 
         - Introduction to data model:
-        https://langfuse.com/docs/tracing-data-model
+        https://langfuse.com/docs/observability/data-model
 
         - Batch sizes are limited to 3.5 MB in total. You need to adjust the
         number of events per batch accordingly.
@@ -2249,6 +2389,43 @@ paths:
           schema:
             type: string
             nullable: true
+        - name: filter
+          in: query
+          description: >-
+            JSON string containing an array of filter conditions. When provided,
+            this takes precedence over legacy filter parameters (userId, name,
+            sessionId, tags, version, release, environment, fromTimestamp,
+            toTimestamp).
+
+            Each filter condition has the following structure:
+
+            ```json
+
+            [
+              {
+                "type": string,           // Required. One of: "datetime", "string", "number", "stringOptions", "categoryOptions", "arrayOptions", "stringObject", "numberObject", "boolean", "null"
+                "column": string,         // Required. Column to filter on
+                "operator": string,       // Required. Operator based on type:
+                                          // - datetime: ">", "<", ">=", "<="
+                                          // - string: "=", "contains", "does not contain", "starts with", "ends with"
+                                          // - stringOptions: "any of", "none of"
+                                          // - categoryOptions: "any of", "none of"
+                                          // - arrayOptions: "any of", "none of", "all of"
+                                          // - number: "=", ">", "<", ">=", "<="
+                                          // - stringObject: "=", "contains", "does not contain", "starts with", "ends with"
+                                          // - numberObject: "=", ">", "<", ">=", "<="
+                                          // - boolean: "=", "<>"
+                                          // - null: "is null", "is not null"
+                "value": any,             // Required (except for null type). Value to compare against. Type depends on filter type
+                "key": string             // Required only for stringObject, numberObject, and categoryOptions types when filtering on nested fields like metadata
+              }
+            ]
+
+            ```
+          required: false
+          schema:
+            type: string
+            nullable: true
       responses:
         '200':
           description: ''
@@ -2283,6 +2460,125 @@ paths:
               schema: {}
       security:
         - BasicAuth: []
+  /api/public/otel/v1/traces:
+    post:
+      description: >-
+        **OpenTelemetry Traces Ingestion Endpoint**
+
+
+        This endpoint implements the OTLP/HTTP specification for trace
+        ingestion, providing native OpenTelemetry integration for Langfuse
+        Observability.
+
+
+        **Supported Formats:**
+
+        - Binary Protobuf: `Content-Type: application/x-protobuf`
+
+        - JSON Protobuf: `Content-Type: application/json`
+
+        - Supports gzip compression via `Content-Encoding: gzip` header
+
+
+        **Specification Compliance:**
+
+        - Conforms to [OTLP/HTTP Trace
+        Export](https://opentelemetry.io/docs/specs/otlp/#otlphttp)
+
+        - Implements `ExportTraceServiceRequest` message format
+
+
+        **Documentation:**
+
+        - Integration guide:
+        https://langfuse.com/integrations/native/opentelemetry
+
+        - Data model: https://langfuse.com/docs/observability/data-model
+      operationId: opentelemetry_exportTraces
+      tags:
+        - Opentelemetry
+      parameters: []
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OtelTraceResponse'
+              examples:
+                BasicTraceExport:
+                  value: {}
+        '400':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '401':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '403':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '405':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                resourceSpans:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/OtelResourceSpan'
+                  description: >-
+                    Array of resource spans containing trace data as defined in
+                    the OTLP specification
+              required:
+                - resourceSpans
+            examples:
+              BasicTraceExport:
+                value:
+                  resourceSpans:
+                    - resource:
+                        attributes:
+                          - key: service.name
+                            value:
+                              stringValue: my-service
+                          - key: service.version
+                            value:
+                              stringValue: 1.0.0
+                      scopeSpans:
+                        - scope:
+                            name: langfuse-sdk
+                            version: 2.60.3
+                          spans:
+                            - traceId: 0123456789abcdef0123456789abcdef
+                              spanId: 0123456789abcdef
+                              name: my-operation
+                              kind: 1
+                              startTimeUnixNano: '1747872000000000000'
+                              endTimeUnixNano: '1747872001000000000'
+                              attributes:
+                                - key: langfuse.observation.type
+                                  value:
+                                    stringValue: generation
+                              status: {}
   /api/public/organizations/memberships:
     get:
       description: >-
@@ -3773,6 +4069,58 @@ paths:
               schema: {}
       security:
         - BasicAuth: []
+    patch:
+      description: Update a score config
+      operationId: scoreConfigs_update
+      tags:
+        - ScoreConfigs
+      parameters:
+        - name: configId
+          in: path
+          description: The unique langfuse identifier of a score config
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScoreConfig'
+        '400':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '401':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '403':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '404':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+        '405':
+          description: ''
+          content:
+            application/json:
+              schema: {}
+      security:
+        - BasicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateScoreConfigRequest'
   /api/public/v2/scores:
     get:
       description: Get a list of scores (supports both trace and session scores)
@@ -3873,6 +4221,13 @@ paths:
         - name: configId
           in: query
           description: Retrieve only scores with a specific configId.
+          required: false
+          schema:
+            type: string
+            nullable: true
+        - name: sessionId
+          in: query
+          description: Retrieve only scores with a specific sessionId.
           required: false
           schema:
             type: string
@@ -4413,9 +4768,48 @@ paths:
           in: query
           description: >-
             Comma-separated list of fields to include in the response. Available
-            field groups are 'core' (always included), 'io' (input, output,
-            metadata), 'scores', 'observations', 'metrics'. If not provided, all
-            fields are included. Example: 'core,scores,metrics'
+            field groups: 'core' (always included), 'io' (input, output,
+            metadata), 'scores', 'observations', 'metrics'. If not specified,
+            all fields are returned. Example: 'core,scores,metrics'. Note:
+            Excluded 'observations' or 'scores' fields return empty arrays;
+            excluded 'metrics' returns -1 for 'totalCost' and 'latency'.
+          required: false
+          schema:
+            type: string
+            nullable: true
+        - name: filter
+          in: query
+          description: >-
+            JSON string containing an array of filter conditions. When provided,
+            this takes precedence over legacy filter parameters (userId, name,
+            sessionId, tags, version, release, environment, fromTimestamp,
+            toTimestamp).
+
+            Each filter condition has the following structure:
+
+            ```json
+
+            [
+              {
+                "type": string,           // Required. One of: "datetime", "string", "number", "stringOptions", "categoryOptions", "arrayOptions", "stringObject", "numberObject", "boolean", "null"
+                "column": string,         // Required. Column to filter on
+                "operator": string,       // Required. Operator based on type:
+                                          // - datetime: ">", "<", ">=", "<="
+                                          // - string: "=", "contains", "does not contain", "starts with", "ends with"
+                                          // - stringOptions: "any of", "none of"
+                                          // - categoryOptions: "any of", "none of"
+                                          // - arrayOptions: "any of", "none of", "all of"
+                                          // - number: "=", ">", "<", ">=", "<="
+                                          // - stringObject: "=", "contains", "does not contain", "starts with", "ends with"
+                                          // - numberObject: "=", ">", "<", ">=", "<="
+                                          // - boolean: "=", "<>"
+                                          // - null: "is null", "is not null"
+                "value": any,             // Required (except for null type). Value to compare against. Type depends on filter type
+                "key": string             // Required only for stringObject, numberObject, and categoryOptions types when filtering on nested fields like metadata
+              }
+            ]
+
+            ```
           required: false
           schema:
             type: string
@@ -4686,6 +5080,178 @@ components:
         - userId
         - queueId
         - projectId
+    BlobStorageIntegrationType:
+      title: BlobStorageIntegrationType
+      type: string
+      enum:
+        - S3
+        - S3_COMPATIBLE
+        - AZURE_BLOB_STORAGE
+    BlobStorageIntegrationFileType:
+      title: BlobStorageIntegrationFileType
+      type: string
+      enum:
+        - JSON
+        - CSV
+        - JSONL
+    BlobStorageExportMode:
+      title: BlobStorageExportMode
+      type: string
+      enum:
+        - FULL_HISTORY
+        - FROM_TODAY
+        - FROM_CUSTOM_DATE
+    BlobStorageExportFrequency:
+      title: BlobStorageExportFrequency
+      type: string
+      enum:
+        - hourly
+        - daily
+        - weekly
+    CreateBlobStorageIntegrationRequest:
+      title: CreateBlobStorageIntegrationRequest
+      type: object
+      properties:
+        projectId:
+          type: string
+          description: ID of the project in which to configure the blob storage integration
+        type:
+          $ref: '#/components/schemas/BlobStorageIntegrationType'
+        bucketName:
+          type: string
+          description: Name of the storage bucket
+        endpoint:
+          type: string
+          nullable: true
+          description: Custom endpoint URL (required for S3_COMPATIBLE type)
+        region:
+          type: string
+          description: Storage region
+        accessKeyId:
+          type: string
+          nullable: true
+          description: Access key ID for authentication
+        secretAccessKey:
+          type: string
+          nullable: true
+          description: Secret access key for authentication (will be encrypted when stored)
+        prefix:
+          type: string
+          nullable: true
+          description: >-
+            Path prefix for exported files (must end with forward slash if
+            provided)
+        exportFrequency:
+          $ref: '#/components/schemas/BlobStorageExportFrequency'
+        enabled:
+          type: boolean
+          description: Whether the integration is active
+        forcePathStyle:
+          type: boolean
+          description: Use path-style URLs for S3 requests
+        fileType:
+          $ref: '#/components/schemas/BlobStorageIntegrationFileType'
+        exportMode:
+          $ref: '#/components/schemas/BlobStorageExportMode'
+        exportStartDate:
+          type: string
+          format: date-time
+          nullable: true
+          description: >-
+            Custom start date for exports (required when exportMode is
+            FROM_CUSTOM_DATE)
+      required:
+        - projectId
+        - type
+        - bucketName
+        - region
+        - exportFrequency
+        - enabled
+        - forcePathStyle
+        - fileType
+        - exportMode
+    BlobStorageIntegrationResponse:
+      title: BlobStorageIntegrationResponse
+      type: object
+      properties:
+        id:
+          type: string
+        projectId:
+          type: string
+        type:
+          $ref: '#/components/schemas/BlobStorageIntegrationType'
+        bucketName:
+          type: string
+        endpoint:
+          type: string
+          nullable: true
+        region:
+          type: string
+        accessKeyId:
+          type: string
+          nullable: true
+        prefix:
+          type: string
+        exportFrequency:
+          $ref: '#/components/schemas/BlobStorageExportFrequency'
+        enabled:
+          type: boolean
+        forcePathStyle:
+          type: boolean
+        fileType:
+          $ref: '#/components/schemas/BlobStorageIntegrationFileType'
+        exportMode:
+          $ref: '#/components/schemas/BlobStorageExportMode'
+        exportStartDate:
+          type: string
+          format: date-time
+          nullable: true
+        nextSyncAt:
+          type: string
+          format: date-time
+          nullable: true
+        lastSyncAt:
+          type: string
+          format: date-time
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - projectId
+        - type
+        - bucketName
+        - region
+        - prefix
+        - exportFrequency
+        - enabled
+        - forcePathStyle
+        - fileType
+        - exportMode
+        - createdAt
+        - updatedAt
+    BlobStorageIntegrationsResponse:
+      title: BlobStorageIntegrationsResponse
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BlobStorageIntegrationResponse'
+      required:
+        - data
+    BlobStorageIntegrationDeletionResponse:
+      title: BlobStorageIntegrationDeletionResponse
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
     CreateCommentRequest:
       title: CreateCommentRequest
       type: object
@@ -5214,8 +5780,8 @@ components:
           type: string
           nullable: true
           description: >-
-            Reference an annotation queue on a score. Populated if the score was
-            initially created in an annotation queue.
+            The annotation queue referenced by the score. Indicates if score was
+            initially created while processing annotation queue.
         environment:
           type: string
           nullable: true
@@ -5369,8 +5935,8 @@ components:
           type: string
           nullable: true
           description: >-
-            Reference an annotation queue on a score. Populated if the score was
-            initially created in an annotation queue.
+            The annotation queue referenced by the score. Indicates if score was
+            initially created while processing annotation queue.
         environment:
           type: string
           nullable: true
@@ -6381,6 +6947,12 @@ components:
         environment:
           type: string
           nullable: true
+        queueId:
+          type: string
+          nullable: true
+          description: >-
+            The annotation queue referenced by the score. Indicates if score was
+            initially created while processing annotation queue.
         value:
           $ref: '#/components/schemas/CreateScoreValue'
           description: >-
@@ -6997,6 +7569,147 @@ components:
       required:
         - data
         - meta
+    OtelResourceSpan:
+      title: OtelResourceSpan
+      type: object
+      description: >-
+        Represents a collection of spans from a single resource as per OTLP
+        specification
+      properties:
+        resource:
+          $ref: '#/components/schemas/OtelResource'
+          nullable: true
+          description: Resource information
+        scopeSpans:
+          type: array
+          items:
+            $ref: '#/components/schemas/OtelScopeSpan'
+          nullable: true
+          description: Array of scope spans
+    OtelResource:
+      title: OtelResource
+      type: object
+      description: Resource attributes identifying the source of telemetry
+      properties:
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/OtelAttribute'
+          nullable: true
+          description: Resource attributes like service.name, service.version, etc.
+    OtelScopeSpan:
+      title: OtelScopeSpan
+      type: object
+      description: Collection of spans from a single instrumentation scope
+      properties:
+        scope:
+          $ref: '#/components/schemas/OtelScope'
+          nullable: true
+          description: Instrumentation scope information
+        spans:
+          type: array
+          items:
+            $ref: '#/components/schemas/OtelSpan'
+          nullable: true
+          description: Array of spans
+    OtelScope:
+      title: OtelScope
+      type: object
+      description: Instrumentation scope information
+      properties:
+        name:
+          type: string
+          nullable: true
+          description: Instrumentation scope name
+        version:
+          type: string
+          nullable: true
+          description: Instrumentation scope version
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/OtelAttribute'
+          nullable: true
+          description: Additional scope attributes
+    OtelSpan:
+      title: OtelSpan
+      type: object
+      description: Individual span representing a unit of work or operation
+      properties:
+        traceId:
+          nullable: true
+          description: Trace ID (16 bytes, hex-encoded string in JSON or Buffer in binary)
+        spanId:
+          nullable: true
+          description: Span ID (8 bytes, hex-encoded string in JSON or Buffer in binary)
+        parentSpanId:
+          nullable: true
+          description: Parent span ID if this is a child span
+        name:
+          type: string
+          nullable: true
+          description: Span name describing the operation
+        kind:
+          type: integer
+          nullable: true
+          description: Span kind (1=INTERNAL, 2=SERVER, 3=CLIENT, 4=PRODUCER, 5=CONSUMER)
+        startTimeUnixNano:
+          nullable: true
+          description: Start time in nanoseconds since Unix epoch
+        endTimeUnixNano:
+          nullable: true
+          description: End time in nanoseconds since Unix epoch
+        attributes:
+          type: array
+          items:
+            $ref: '#/components/schemas/OtelAttribute'
+          nullable: true
+          description: >-
+            Span attributes including Langfuse-specific attributes
+            (langfuse.observation.*)
+        status:
+          nullable: true
+          description: Span status object
+    OtelAttribute:
+      title: OtelAttribute
+      type: object
+      description: Key-value attribute pair for resources, scopes, or spans
+      properties:
+        key:
+          type: string
+          nullable: true
+          description: Attribute key (e.g., "service.name", "langfuse.observation.type")
+        value:
+          $ref: '#/components/schemas/OtelAttributeValue'
+          nullable: true
+          description: Attribute value
+    OtelAttributeValue:
+      title: OtelAttributeValue
+      type: object
+      description: Attribute value wrapper supporting different value types
+      properties:
+        stringValue:
+          type: string
+          nullable: true
+          description: String value
+        intValue:
+          type: integer
+          nullable: true
+          description: Integer value
+        doubleValue:
+          type: number
+          format: double
+          nullable: true
+          description: Double value
+        boolValue:
+          type: boolean
+          nullable: true
+          description: Boolean value
+    OtelTraceResponse:
+      title: OtelTraceResponse
+      type: object
+      description: Response from trace export request. Empty object indicates success.
+      properties: {}
     MembershipRole:
       title: MembershipRole
       type: string
@@ -7232,6 +7945,9 @@ components:
       properties:
         name:
           type: string
+        type:
+          $ref: '#/components/schemas/PromptType'
+          description: Indicates whether the prompt is a text or chat prompt.
         versions:
           type: array
           items:
@@ -7253,6 +7969,7 @@ components:
             filters (if any are provided)
       required:
         - name
+        - type
         - versions
         - labels
         - tags
@@ -7368,6 +8085,12 @@ components:
             - $ref: '#/components/schemas/TextPrompt'
           required:
             - type
+    PromptType:
+      title: PromptType
+      type: string
+      enum:
+        - chat
+        - text
     BasePrompt:
       title: BasePrompt
       type: object
@@ -7821,6 +8544,48 @@ components:
       required:
         - name
         - dataType
+    UpdateScoreConfigRequest:
+      title: UpdateScoreConfigRequest
+      type: object
+      properties:
+        isArchived:
+          type: boolean
+          nullable: true
+          description: The status of the score config showing if it is archived or not
+        name:
+          type: string
+          nullable: true
+          description: The name of the score config
+        categories:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigCategory'
+          nullable: true
+          description: >-
+            Configure custom categories for categorical scores. Pass a list of
+            objects with `label` and `value` properties. Categories are
+            autogenerated for boolean configs and cannot be passed
+        minValue:
+          type: number
+          format: double
+          nullable: true
+          description: >-
+            Configure a minimum value for numerical scores. If not set, the
+            minimum value defaults to -∞
+        maxValue:
+          type: number
+          format: double
+          nullable: true
+          description: >-
+            Configure a maximum value for numerical scores. If not set, the
+            maximum value defaults to +∞
+        description:
+          type: string
+          nullable: true
+          description: >-
+            Description is shown across the Langfuse UI and can be used to e.g.
+            explain the config categories in detail, why a numeric range was
+            set, or provide additional context on config name or usage
     GetScoresResponseTraceData:
       title: GetScoresResponseTraceData
       type: object
@@ -7955,6 +8720,12 @@ components:
             The environment of the score. Can be any lowercase alphanumeric
             string with hyphens and underscores that does not start with
             'langfuse'.
+        queueId:
+          type: string
+          nullable: true
+          description: >-
+            The annotation queue referenced by the score. Indicates if score was
+            initially created while processing annotation queue.
         dataType:
           $ref: '#/components/schemas/ScoreDataType'
           nullable: true

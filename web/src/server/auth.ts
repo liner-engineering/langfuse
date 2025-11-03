@@ -30,6 +30,7 @@ import CognitoProvider from "next-auth/providers/cognito";
 import AzureADProvider from "next-auth/providers/azure-ad";
 import KeycloakProvider from "next-auth/providers/keycloak";
 import WorkOSProvider from "next-auth/providers/workos";
+import WordPressProvider from "next-auth/providers/wordpress";
 import { type Provider } from "next-auth/providers/index";
 import { getCookieName, getCookieOptions } from "./utils/cookies";
 import {
@@ -194,7 +195,7 @@ if (
       clientId: env.AUTH_CUSTOM_CLIENT_ID,
       clientSecret: env.AUTH_CUSTOM_CLIENT_SECRET,
       issuer: env.AUTH_CUSTOM_ISSUER,
-      idToken: env.AUTH_CUSTOM_ID_TOKEN !== "false", // defaults to true
+      idToken: env.AUTH_CUSTOM_ID_TOKEN === "true",
       allowDangerousEmailAccountLinking:
         env.AUTH_CUSTOM_ALLOW_ACCOUNT_LINKING === "true",
       authorization: {
@@ -363,8 +364,12 @@ if (
       clientId: env.AUTH_KEYCLOAK_CLIENT_ID,
       clientSecret: env.AUTH_KEYCLOAK_CLIENT_SECRET,
       issuer: env.AUTH_KEYCLOAK_ISSUER,
+      idToken: env.AUTH_KEYCLOAK_ID_TOKEN === "true",
       allowDangerousEmailAccountLinking:
         env.AUTH_KEYCLOAK_ALLOW_ACCOUNT_LINKING === "true",
+      authorization: {
+        params: { scope: env.AUTH_KEYCLOAK_SCOPE ?? "openid email profile" },
+      },
       client: {
         token_endpoint_auth_method: env.AUTH_KEYCLOAK_CLIENT_AUTH_METHOD,
       },
@@ -382,6 +387,20 @@ if (env.AUTH_WORKOS_CLIENT_ID && env.AUTH_WORKOS_CLIENT_SECRET)
       client: {
         token_endpoint_auth_method: "client_secret_post",
       },
+    }),
+  );
+
+if (env.AUTH_WORDPRESS_CLIENT_ID && env.AUTH_WORDPRESS_CLIENT_SECRET)
+  staticProviders.push(
+    WordPressProvider({
+      clientId: env.AUTH_WORDPRESS_CLIENT_ID,
+      clientSecret: env.AUTH_WORDPRESS_CLIENT_SECRET,
+      allowDangerousEmailAccountLinking:
+        env.AUTH_WORDPRESS_ALLOW_ACCOUNT_LINKING === "true",
+      client: {
+        token_endpoint_auth_method: env.AUTH_WORDPRESS_CLIENT_AUTH_METHOD,
+      },
+      checks: env.AUTH_WORDPRESS_CHECKS,
     }),
   );
 
@@ -421,13 +440,15 @@ const extendedPrismaAdapter: Adapter = {
     // (refresh_expires_in and not-before-policy in).
     // So, we need to remove this data from the payload before linking an account.
     // https://github.com/nextauthjs/next-auth/issues/7655
-    if (data.provider === "keycloak") {
+    if (data.provider.endsWith("keycloak")) {
+      // endsWith required as the multi-tenant cloud SSO providers are in the "domain.provider" format
       delete data["refresh_expires_in"];
       delete data["not-before-policy"];
     }
 
     // WorkOS returns profile data that doesn't match the schema
-    if (data.provider === "workos") {
+    if (data.provider.endsWith("workos")) {
+      // endsWith required as the multi-tenant cloud SSO providers are in the "domain.provider" format
       delete data["profile"];
     }
 
@@ -440,6 +461,71 @@ const extendedPrismaAdapter: Adapter = {
     }
 
     await prismaAdapter.linkAccount(data);
+  },
+
+  // Make email-OTP login that is used for password reset safer
+  async useVerificationToken(params) {
+    if (!prismaAdapter.useVerificationToken)
+      throw new Error("useVerificationToken not implemented");
+
+    try {
+      // First, attempt to use the token with the default behavior
+      const result = await prismaAdapter.useVerificationToken(params);
+
+      if (result) {
+        // Token was valid and successfully used
+        logger.info("OTP verification successful", {
+          identifier: params.identifier,
+          timestamp: new Date().toISOString(),
+        });
+        return result;
+      }
+
+      // If no result, the token was either invalid or expired
+      // Log security event for monitoring
+      logger.info("Failed OTP verification attempt", {
+        identifier: params.identifier,
+        token: params.token?.substring(0, 2) + "****", // Log partial token for debugging
+        timestamp: new Date().toISOString(),
+        reason: "invalid_or_expired",
+      });
+
+      // Delete any existing token for this identifier to prevent enumeration
+      await prisma.verificationToken.deleteMany({
+        where: {
+          identifier: params.identifier,
+        },
+      });
+
+      return null;
+    } catch (error) {
+      // Log security event for any error during token verification
+      logger.error("OTP verification error", {
+        identifier: params.identifier,
+        token: params.token?.substring(0, 2) + "****",
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+
+      // On any error (invalid token, etc.), delete all tokens for this identifier
+      // to prevent enumeration attacks
+      try {
+        await prisma.verificationToken.deleteMany({
+          where: {
+            identifier: params.identifier,
+          },
+        });
+      } catch (deleteError) {
+        // Log deletion error but don't throw to avoid masking original error
+        logger.error(
+          "Failed to delete verification tokens on error",
+          deleteError,
+        );
+      }
+
+      // Re-throw the original error
+      throw error;
+    }
   },
 };
 
@@ -540,6 +626,8 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
                               string,
                               unknown
                             >) ?? {},
+                          aiFeaturesEnabled:
+                            orgMembership.organization.aiFeaturesEnabled,
                           cloudConfig: parsedCloudConfig.data,
                           projects: orgMembership.organization.projects
                             .map((project) => {
@@ -585,7 +673,7 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
         });
       },
       async signIn({ user, account, profile }) {
-        return instrumentAsync({ name: "next-auth-sign-in" }, async () => {
+        return instrumentAsync({ name: "next-auth-sign-in" }, async (span) => {
           // Block sign in without valid user.email
           const email = user.email?.toLowerCase();
           if (!email) {
@@ -597,6 +685,9 @@ export async function getAuthOptions(): Promise<NextAuthOptions> {
             throw new Error("Invalid email found in user object");
           }
 
+          span.setAttributes({
+            "auth.email": email,
+          });
           // EE: Check custom SSO enforcement, enforce the specific SSO provider on email domain
           // This also blocks setting a password for an email that is enforced to use SSO via password reset flow
           const userDomain = email.split("@")[1].toLowerCase();

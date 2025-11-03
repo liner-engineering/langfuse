@@ -4,18 +4,10 @@ import {
   ObservationRecordInsertType,
   ScoreRecordInsertType,
   DatasetRunItemRecordInsertType,
-  convertTraceToTraceNull,
+  EventRecordInsertType,
 } from "../repositories/definitions";
-import { env } from "../../env";
 
 export const createTracesCh = async (trace: TraceRecordInsertType[]) => {
-  if (env.LANGFUSE_EXPERIMENT_INSERT_INTO_AGGREGATING_MERGE_TREES === "true") {
-    await clickhouseClient().insert({
-      table: "traces_null",
-      format: "JSONEachRow",
-      values: trace.map(convertTraceToTraceNull),
-    });
-  }
   return await clickhouseClient().insert({
     table: "traces",
     format: "JSONEachRow",
@@ -30,6 +22,14 @@ export const createObservationsCh = async (
     table: "observations",
     format: "JSONEachRow",
     values: observations,
+  });
+};
+
+export const createEventsCh = async (events: EventRecordInsertType[]) => {
+  return await clickhouseClient().insert({
+    table: "events",
+    format: "JSONEachRow",
+    values: events,
   });
 };
 

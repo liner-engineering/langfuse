@@ -6,6 +6,7 @@ import {
   getQueue,
   IngestionQueue,
   logger,
+  OtelIngestionQueue,
   QueueName,
   TraceUpsertQueue,
 } from "@langfuse/shared/src/server";
@@ -112,6 +113,7 @@ export const getQueues = () => {
     QueueName.BlobStorageIntegrationQueue,
     QueueName.DeadLetterRetryQueue,
     QueueName.PostHogIntegrationQueue,
+    QueueName.CloudFreeTierUsageThresholdQueue,
   ];
 
   return queues
@@ -123,12 +125,16 @@ export const getQueues = () => {
         ? IngestionQueue.getInstance({ shardName: queueName })
         : queueName.startsWith(QueueName.TraceUpsert)
           ? TraceUpsertQueue.getInstance({ shardName: queueName })
-          : getQueue(
-              queueName as Exclude<
-                QueueName,
-                QueueName.IngestionQueue | QueueName.TraceUpsert
-              >,
-            ),
+          : queueName.startsWith(QueueName.OtelIngestionQueue)
+            ? OtelIngestionQueue.getInstance({ shardName: queueName })
+            : getQueue(
+                queueName as Exclude<
+                  QueueName,
+                  | QueueName.IngestionQueue
+                  | QueueName.TraceUpsert
+                  | QueueName.OtelIngestionQueue
+                >,
+              ),
     );
 };
 

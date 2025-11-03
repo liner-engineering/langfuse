@@ -1,16 +1,25 @@
 import { FileContent, SeederOptions } from "./types";
 import { DataGenerator } from "./data-generators";
 import { ClickHouseQueryBuilder } from "./clickhouse-builder";
+import { FrameworkTraceLoader } from "./framework-traces/framework-trace-loader";
 import { EVAL_TRACE_COUNT, SEED_DATASETS } from "./postgres-seed-constants";
 import {
   clickhouseClient,
   DatasetRunItemRecordInsertType,
   logger,
   ObservationRecordInsertType,
+  ScoreRecordInsertType,
   TraceRecordInsertType,
 } from "../../../src/server";
 import path from "path";
 import { readFileSync } from "fs";
+
+const DATASET_SCORE_NAMES = ["score-1", "score-2", "score-3"];
+const DATASET_RUN_SCORE_NAMES = [
+  "dataset-run-score-1",
+  "dataset-run-score-2",
+  "dataset-run-score-3",
+];
 
 /**
  * Orchestrates seeding operations across ClickHouse and PostgreSQL.
@@ -98,6 +107,7 @@ export class SeederOrchestrator {
         const traces: TraceRecordInsertType[] = [];
         const observations: ObservationRecordInsertType[] = [];
         const datasetRunItems: DatasetRunItemRecordInsertType[] = [];
+        const scores: ScoreRecordInsertType[] = [];
 
         for (const seedDataset of SEED_DATASETS) {
           for (const [itemIndex, datasetItem] of seedDataset.items.entries()) {
@@ -136,16 +146,43 @@ export class SeederOrchestrator {
               projectId,
             );
 
+            // Generate score data
+            const score = this.dataGenerator.generateDatasetScore(
+              trace,
+              {
+                datasetName: seedDataset.name,
+                itemIndex,
+                item: datasetItem,
+                runNumber,
+              },
+              projectId,
+              DATASET_SCORE_NAMES,
+            );
+
             traces.push(trace);
             observations.push(observation);
             datasetRunItems.push(datasetRunItem);
+            scores.push(score);
           }
+
+          // create dataset run level scores
+          const datasetRunScore = this.dataGenerator.generateDatasetRunScore(
+            `${seedDataset.name}-${projectId.slice(-8)}`,
+            {
+              datasetName: seedDataset.name,
+              runNumber,
+            },
+            projectId,
+            DATASET_RUN_SCORE_NAMES,
+          );
+          scores.push(datasetRunScore);
         }
 
         try {
           await this.queryBuilder.executeTracesInsert(traces);
           await this.queryBuilder.executeObservationsInsert(observations);
           await this.queryBuilder.executeDatasetRunItemsInsert(datasetRunItems);
+          await this.queryBuilder.executeScoresInsert(scores);
         } catch (error) {
           logger.error(`✗ Insert failed:`, error);
           throw error;
@@ -223,6 +260,7 @@ export class SeederOrchestrator {
           this.fileContent || undefined,
           { numberOfDays: opts.numberOfDays },
         );
+
         const observationQuery = this.queryBuilder.buildBulkObservationsInsert(
           projectId,
           tracesPerProject,
@@ -285,6 +323,12 @@ export class SeederOrchestrator {
       // Create synthetic data
       await this.createSyntheticData(projectIds, opts);
 
+      // Create traces for a realistic chat session
+      await this.createSupportChatSessionTraces(projectIds);
+
+      // create traces from real examples for each framework source
+      await this.createFrameworkTraces(projectIds);
+
       // Log completion statistics (commented out to reduce terminal noise)
       await this.logStatistics();
 
@@ -339,6 +383,59 @@ export class SeederOrchestrator {
         );
       } catch (error) {
         logger.warn(`Could not log statistics for ${table}:`, error);
+      }
+    }
+  }
+
+  async createSupportChatSessionTraces(projectIds: string[]): Promise<void> {
+    logger.info(
+      `Creating support chat session data for ${projectIds.length} projects.`,
+    );
+
+    for (const projectId of projectIds) {
+      logger.info(`Processing support chat session for project ${projectId}`);
+
+      // Generate data using the data generator
+      const { traces, observations, scores } =
+        this.dataGenerator.generateSupportChatSessionData(projectId);
+
+      try {
+        await this.queryBuilder.executeTracesInsert(traces);
+        await this.queryBuilder.executeObservationsInsert(observations);
+        await this.queryBuilder.executeScoresInsert(scores);
+      } catch (error) {
+        logger.error(`✗ Support chat session insert failed:`, error);
+        throw error;
+      }
+    }
+  }
+
+  // create traces from real examples for each framework source
+  // useful for testing rendering
+  async createFrameworkTraces(projectIds: string[]): Promise<void> {
+    logger.info(`Creating framework traces for ${projectIds.length} projects.`);
+
+    const loader = new FrameworkTraceLoader();
+
+    for (const projectId of projectIds) {
+      logger.info(`Processing framework traces for project ${projectId}`);
+
+      const { traces, observations, scores } =
+        loader.loadTracesForProject(projectId);
+
+      try {
+        if (traces.length > 0) {
+          await this.queryBuilder.executeTracesInsert(traces);
+        }
+        if (observations.length > 0) {
+          await this.queryBuilder.executeObservationsInsert(observations);
+        }
+        if (scores.length > 0) {
+          await this.queryBuilder.executeScoresInsert(scores);
+        }
+      } catch (error) {
+        logger.error(`✗ Framework traces insert failed:`, error);
+        throw error;
       }
     }
   }

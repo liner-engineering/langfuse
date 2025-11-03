@@ -1,7 +1,6 @@
 import { randomUUID } from "crypto";
 import { z } from "zod/v4";
 
-import { type Model } from "../../db";
 import { env } from "../../env";
 import {
   InvalidRequestError,
@@ -49,12 +48,6 @@ const getS3StorageServiceClient = (bucketName: string): StorageService => {
   }
   return s3StorageServiceClient;
 };
-
-// eslint-disable-next-line no-unused-vars
-export type TokenCountDelegate = (p: {
-  model: Model;
-  text: unknown;
-}) => number | undefined;
 
 /**
  * Get the delay for the event based on the event type. Uses delay if set, 0 if current UTC timestamp is not between
@@ -115,6 +108,9 @@ export const processEventBatch = async (
     error?: string;
   }[];
 }> => {
+  if (input.length === 0) {
+    return { successes: [], errors: [] };
+  }
   const { delay = null, source = "api", isLangfuseInternal = false } = options;
 
   // add context of api call to the span
@@ -322,7 +318,7 @@ export const processEventBatch = async (
             },
             { delay: getDelay(delay, source) },
           )
-        : Promise.reject("Failed to instantiate queue");
+        : Promise.reject("Failed to instantiate ingestion queue");
     }),
   );
 
