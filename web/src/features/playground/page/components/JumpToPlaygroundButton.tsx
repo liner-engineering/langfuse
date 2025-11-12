@@ -1,7 +1,6 @@
 import { Terminal, ChevronDown } from "lucide-react";
 import { useEffect, useState, useMemo } from "react";
 import { useRouter } from "next/router";
-import { z } from "zod/v4";
 import { v4 as uuidv4 } from "uuid";
 
 import { createEmptyMessage } from "@/src/components/ChatMessages/utils/createEmptyMessage";
@@ -28,7 +27,6 @@ import {
   type UIModelParams,
   ZodModelConfig,
   ChatMessageType,
-  OpenAIToolSchema,
   type ChatMessage,
   OpenAIResponseFormatSchema,
   type Prisma,
@@ -36,7 +34,8 @@ import {
   PromptType,
   isGenerationLike,
 } from "@langfuse/shared";
-import { normalizeInput, extractAdditionalInput } from "@/src/utils/chatml";
+import { normalizeInput, normalizeOutput } from "@/src/utils/chatml";
+import { extractTools } from "@/src/utils/chatml/extractTools";
 import { convertChatMlToPlayground } from "@/src/utils/chatml/playgroundConverter";
 import { api } from "@/src/utils/api";
 import { cn } from "@/src/utils/tailwind";
@@ -259,7 +258,11 @@ const parseGeneration = (
   if (!isGenerationLike(generation.type)) return null;
 
   let modelParams = parseModelParams(generation, modelToProviderMap);
-  const tools = parseTools(generation);
+  const tools = parseTools(
+    generation.input,
+    generation.output,
+    generation.metadata,
+  );
   const structuredOutputSchema = parseStructuredOutputSchema(generation);
   const providerOptions = parseLitellmMetadataFromGeneration(generation);
 
@@ -335,7 +338,7 @@ const parseGeneration = (
 
       const inResult = normalizeInput(input, ctx);
 
-      const messages = inResult.success
+      let messages = inResult.success
         ? inResult.data
             .map(convertChatMlToPlayground)
             .filter(
@@ -343,12 +346,59 @@ const parseGeneration = (
             )
         : [];
 
+      // process output for final assistant message
+      // this doesn't make that much sense, because the output is already the LLM result
+      // but some people wanted to have the entire thing, so that they can then iterate
+      // on the final result (e.g. ask it questions).
+      // NOTE: will probably remove later at some point on next playground release
+      let output = generation.output?.valueOf();
+      if (output && typeof output === "string") {
+        try {
+          output = JSON.parse(output);
+        } catch {
+          // ignore parse errors
+        }
+      }
+
+      if (output && typeof output === "object") {
+        try {
+          const outResult = normalizeOutput(output, ctx);
+          const outputMessages = outResult.success
+            ? outResult.data
+                .map(convertChatMlToPlayground)
+                .filter(
+                  (msg): msg is ChatMessage | PlaceholderMessage =>
+                    msg !== null,
+                )
+                // Filter tool calls without results (i.e. assistant messages with tool_calls but no results)
+                // here, a tool was just selected by an LLM but not called yet.
+                // we don't want this in the playground, because we a) cannot run the playground
+                // and b) if we jump to the playground, we exactly want to test if the LLM selects the tool
+                .filter((msg) => msg.type !== ChatMessageType.AssistantToolCall)
+            : [];
+
+          // Append output messages to input messages
+          messages = [...messages, ...outputMessages];
+        } catch {
+          // ignore output processing errors
+        }
+      }
+
       if (messages.length === 0) return null;
+
+      // Extract tools from normalized ChatML messages (they may have tools attached)
+      const normalizedTools =
+        inResult.success && inResult.data
+          ? extractTools(inResult.data, ctx.metadata)
+          : [];
+
+      // Merge with tools from input/metadata, prefer normalized tools
+      const mergedTools = normalizedTools.length > 0 ? normalizedTools : tools;
 
       return {
         messages,
         modelParams,
-        tools,
+        tools: mergedTools,
         structuredOutputSchema,
       };
     } catch {
@@ -402,39 +452,29 @@ function parseModelParams(
 }
 
 function parseTools(
-  generation: Omit<Observation, "input" | "output" | "metadata"> & {
-    input: string | null;
-    output: string | null;
-    metadata: string | null;
-  },
+  inputString: string | null,
+  outputString: string | null,
+  metadataString: string | null,
 ): PlaygroundTool[] {
+  if (!inputString && !outputString && !metadataString) return [];
+
   try {
-    const input = JSON.parse(generation.input as string);
+    const input = inputString ? JSON.parse(inputString) : null;
+    const output = outputString ? JSON.parse(outputString) : null;
+    const metadata = metadataString ? JSON.parse(metadataString) : null;
 
-    // Check additional.tools , langchain puts tools there
-    const additionalInput = extractAdditionalInput(input);
-    if (additionalInput?.tools && Array.isArray(additionalInput.tools)) {
-      return additionalInput.tools.map((tool: any) => ({
-        id: Math.random().toString(36).substring(2),
-        name: tool.name || tool.function?.name,
-        description: tool.description || tool.function?.description,
-        parameters: tool.parameters || tool.function?.parameters,
-      }));
+    const inputTools = extractTools(input, metadata);
+    if (inputTools.length > 0) return inputTools;
+
+    // also check the output for tools, e.g. if a user jumps from the last generation
+    if (output) {
+      return extractTools(output, metadata);
     }
 
-    // OpenAI format: tools in input.tools field
-    if (typeof input === "object" && input !== null && "tools" in input) {
-      const parsedTools = z.array(OpenAIToolSchema).safeParse(input["tools"]);
-
-      if (parsedTools.success)
-        return parsedTools.data.map((tool) => ({
-          id: Math.random().toString(36).substring(2),
-          ...tool.function,
-        }));
-    }
-  } catch {}
-
-  return [];
+    return [];
+  } catch {
+    return [];
+  }
 }
 
 function parseStructuredOutputSchema(

@@ -32,6 +32,7 @@ import { ScoreRecordReadType } from "./definitions";
 import { env } from "../../env";
 import { _handleGetScoreById, _handleGetScoresByIds } from "./scores-utils";
 import { parseMetadataCHRecordToDomain } from "../utils/metadata_conversion";
+import type { AnalyticsScoreEvent } from "../analytics-integrations/types";
 import { ClickHouseClientConfigOptions } from "@clickhouse/client";
 import { recordDistribution } from "../instrumentation";
 import { prisma } from "../../db";
@@ -1041,6 +1042,55 @@ export const getScoreNames = async (
   }));
 };
 
+export const getScoreStringValues = async (
+  projectId: string,
+  timestampFilter: FilterState,
+) => {
+  const chFilter = new FilterList(
+    createFilterFromFilterState(
+      timestampFilter,
+      scoresTableUiColumnDefinitions,
+    ),
+  );
+  const timestampFilterRes = chFilter.apply();
+
+  const query = `
+      select
+        string_value,
+        count(*) as count
+      from scores s
+      WHERE s.project_id = {projectId: String}
+      AND string_value IS NOT NULL
+      AND string_value != ''
+      ${timestampFilterRes?.query ? `AND ${timestampFilterRes.query}` : ""}
+      GROUP BY string_value
+      ORDER BY count() desc
+      LIMIT 1000;
+    `;
+
+  const rows = await queryClickhouse<{
+    string_value: string;
+    count: string;
+  }>({
+    query: query,
+    params: {
+      projectId: projectId,
+      ...(timestampFilterRes ? timestampFilterRes.params : {}),
+    },
+    tags: {
+      feature: "tracing",
+      type: "score",
+      kind: "list",
+      projectId,
+    },
+  });
+
+  return rows.map((row) => ({
+    value: row.string_value,
+    count: Number(row.count),
+  }));
+};
+
 export const deleteScores = async (projectId: string, scoreIds: string[]) => {
   const query = `
     DELETE FROM scores
@@ -1207,6 +1257,7 @@ export const getAggregatedScoresForPrompts = async (
       s.source,
       s.data_type,
       s.comment,
+      s.timestamp,
       length(mapKeys(s.metadata)) > 0 AS has_metadata
     FROM scores s FINAL LEFT JOIN observations o FINAL
       ON o.trace_id = s.trace_id
@@ -1409,7 +1460,7 @@ export const getScoresForBlobStorageExport = function (
   return records;
 };
 
-export const getScoresForPostHog = async function* (
+export const getScoresForAnalyticsIntegrations = async function* (
   projectId: string,
   minTimestamp: Date,
   maxTimestamp: Date,
@@ -1436,7 +1487,8 @@ export const getScoresForPostHog = async function* (
       t.release as trace_release,
       t.tags as trace_tags,
       s.metadata as metadata,
-      t.metadata['$posthog_session_id'] as posthog_session_id
+      t.metadata['$posthog_session_id'] as posthog_session_id,
+      t.metadata['$mixpanel_session_id'] as mixpanel_session_id
     FROM scores s FINAL
     LEFT JOIN ${traceTable} t FINAL ON s.trace_id = t.id AND s.project_id = t.project_id
     WHERE s.project_id = {projectId: String}
@@ -1498,6 +1550,9 @@ export const getScoresForPostHog = async function* (
       langfuse_score_data_type: record.data_type,
       langfuse_trace_name: record.trace_name,
       langfuse_trace_id: effectiveTraceId,
+      langfuse_user_url: record.trace_user_id
+        ? `${baseUrl}/project/${projectId}/users/${encodeURIComponent(record.trace_user_id as string)}`
+        : undefined,
       langfuse_id: record.id,
       langfuse_session_id: effectiveSessionId,
       langfuse_project_id: projectId,
@@ -1514,17 +1569,9 @@ export const getScoresForPostHog = async function* (
             ? "dataset_run"
             : "unknown",
       langfuse_dataset_run_id: record.score_dataset_run_id,
-      $session_id: record.posthog_session_id ?? null,
-      ...(record.trace_user_id
-        ? {
-            $set: {
-              langfuse_user_url: `${baseUrl}/project/${projectId}/users/${encodeURIComponent(record.trace_user_id as string)}`,
-            },
-          }
-        : // Capture as anonymous PostHog event (cheaper/faster)
-          // https://posthog.com/docs/data/anonymous-vs-identified-events?tab=Backend
-          { $process_person_profile: false }),
-    };
+      posthog_session_id: record.posthog_session_id ?? null,
+      mixpanel_session_id: record.mixpanel_session_id ?? null,
+    } satisfies AnalyticsScoreEvent;
   }
 };
 

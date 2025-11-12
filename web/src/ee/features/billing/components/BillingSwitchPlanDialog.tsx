@@ -149,9 +149,7 @@ export const BillingSwitchPlanDialog = ({
                       <div className="text-sm font-medium">Main features:</div>
                       <ul className="list-inside list-disc space-y-1 text-sm text-muted-foreground">
                         {product.checkout?.mainFeatures.map(
-                          (feature, index) => (
-                            <li key={index}>{feature}</li>
-                          ),
+                          (feature, index) => <li key={index}>{feature}</li>,
                         )}
                       </ul>
                     </div>
